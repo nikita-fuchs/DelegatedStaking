@@ -1,5 +1,9 @@
 import { describe } from "mocha";
-import  * as chai from 'chai';
+import * as chai from 'chai'    
+import chaiAsPromised from 'chai-as-promised'
+chai.use(chaiAsPromised)
+
+
 import { AeSdk, MemoryAccount, Node, CompilerHttp, Contract, getBalance, AE_AMOUNT_FORMATS } from '@aeternity/aepp-sdk';
 import sourceCode from './sourceCode.ts';
 import * as dotenv from 'dotenv';
@@ -40,7 +44,7 @@ const aeSdk = new AeSdk({
   onCompiler: new CompilerHttp('https://v8.compiler.aepps.com'),
 });
 
-await aeSdk.spend(500, producer.address, {onAccount: fundSource, denomination: AE_AMOUNT_FORMATS.MILI_AE});  //0.5 AE
+await aeSdk.spend(700, producer.address, {onAccount: fundSource, denomination: AE_AMOUNT_FORMATS.MILI_AE});  //0.7 AE
 await aeSdk.spend(350, delegator.address, {onAccount: fundSource, denomination: AE_AMOUNT_FORMATS.MILI_AE}); //0.35 AE
 
 var stakingContract
@@ -49,8 +53,8 @@ describe('Simple roundtrip:', function () {
 
   beforeEach(async function () {
     console.log('Waiting to prevent nonce issue...');
-    // wait for 3 seconds
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    // wait for 4 seconds
+    await new Promise(resolve => setTimeout(resolve, 4000));
   });
 
   it('should set up the sdk and connect to AE', async function () {
@@ -242,7 +246,6 @@ describe('Simple roundtrip:', function () {
 
       console.dir(state.decodedResult, { depth: null, colors: true });
 
-
       chai.expect(callResult!.result.returnType).to.equal('ok') &&
       chai.expect(withdrawnReward).to.equal(BigInt(Math.pow(10, 17) / 2)); // 0,05 AE
 
@@ -250,24 +253,98 @@ describe('Simple roundtrip:', function () {
   }); 
 
 
-  //WIP
-
- /* 
+ 
   it('should not withdraw anything a second time / if you don`t have any rewards to withdraw', async function () {
- });  */
+        // call function
+        console.log('Calling withdraw_rewards, again');
+        await chai.expect(stakingContract.withdraw_rewards(producer.address, {onAccount: delegator})).to.be.rejected
+    
+ }); 
 
- /* 
 
-it('staker should be able to increase his stake', function () {
- chai.expect(false).to.be.a('boolean');
+ 
+it('staker should be able to increase his stake', async function () {
+  console.log('Calling stub_stake');
+
+  let call = await stakingContract.stub_get_stake(producer.address);
+  let oldBalance = call.decodedResult;
+
+  var callResult;
+  try {
+    callResult = await stakingContract.stub_stake({amount: (2 * Math.pow(10, 17)), onAccount: producer}); // add 0,2 AE
+    console.log('Transaction ID:', callResult.hash);
+    console.log('callResult.result.returnType:', callResult.result.returnType);
+    console.log('Function call returned:', callResult.decodedResult);
+  } catch (error) {
+    console.log('Calling register_as_delegatee errored:', error);
+    throw error;
+  }
+
+  let call2 = await stakingContract.stub_get_stake(producer.address);
+  let newBalance = call2.decodedResult;
+
+  console.log("oldBalance:", oldBalance);
+  console.log("newBalance:", newBalance);
+
+  chai.expect(newBalance - oldBalance).to.equal(BigInt(2 * Math.pow(10, 17))); // 0,2 AE
 }); 
-*/
+
     /* 
   
-  it('staker should be able to reduce his stake', function () {
+  it('the increased stake amount is correctly noted in the delegation bookkeeping', function () {
     chai.expect(false).to.be.a('boolean');
   }); 
+
   */
+    
+  
+  it('staker should be able to reduce his stake', async function () {
+
+      console.log('Calling stub_reduce_stake');
+
+  let call = await stakingContract.stub_get_stake(producer.address);
+  let oldBalance = call.decodedResult;
+
+  var callResult;
+  try {
+    callResult = await stakingContract.stub_reduce_stake(Math.pow(10, 17), {onAccount: producer}); // reduce by 0,1 AE
+    console.log('Transaction ID:', callResult.hash);
+    console.log('callResult.result.returnType:', callResult.result.returnType);
+    console.log('Function call returned:', callResult.decodedResult);
+  } catch (error) {
+    console.log('Calling register_as_delegatee errored:', error);
+    throw error;
+  }
+
+  let call2 = await stakingContract.stub_get_stake(producer.address);
+  let newBalance = call2.decodedResult;
+
+  //
+  //wait for 4 seconds to let the nodes sync
+  // await new Promise(resolve => setTimeout(resolve, 10000));
+
+  // get how much was transfered to the withdrawer
+  let call3 = await stakingContract.stub_debug_get_state()
+  let state = call3.decodedResult;
+  console.log(state);
+  var lastWithdraw = state.debug_last_withdrawn_amount
+  console.log("lastWithdraw:", lastWithdraw);
+
+
+  console.log("oldBalance:", oldBalance);
+  console.log("newBalance:", newBalance);
+  // chai.expect(lastWithdraw).to.equal(BigInt(Math.pow(10,17))) && // 0,1 AE
+  chai.expect(oldBalance - newBalance).to.equal(BigInt(Math.pow(10, 17))); // 0,1 AE
+  }); 
+  
+   /* 
+  
+  it('the decreased stake amount is correctly noted in the delegation bookkeeping', function () {
+    chai.expect(false).to.be.a('boolean');
+  }); 
+
+  */
+
     /* 
   
   it('payouts should happen correctly after staker adjusts his stake', function () {
@@ -275,5 +352,13 @@ it('staker should be able to increase his stake', function () {
   }); 
   */
 
+function logState(){
+  return new Promise(async (resolve, reject) => {
+    let state = await stakingContract.stub_debug_get_state();
+    console.log("state:");
+    console.dir(state.decodedResult, { depth: null, colors: true });
+    resolve(true);
+  });
+}
 
 });

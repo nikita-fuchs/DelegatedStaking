@@ -1,6 +1,4 @@
-const sourceCode =`
-
-@compiler >= 6
+const sourceCode =`@compiler >= 6
 
 include "String.aes"
 include "List.aes"
@@ -139,6 +137,7 @@ contract StakingPoC =
         put(state{delegated_stakes[delegatee] = others_delegated_stakes ++ updated_delegated_stakes}) 
         
         put(state{debug_last_withdrawn_amount = total_rewards})
+        require(total_rewards > 0, "No rewards available to withdraw for the chosen delegatee")
         Chain.spend(Call.caller, total_rewards) 
 
     // CRITICAL TODO: Called in the step() function. assigns every eligible delegator ( if delegated long enough) and the Call.caller (always) a reward.
@@ -277,16 +276,17 @@ contract StakingPoC =
 
     // CRITICAL TODO: If somebody stakes or increases his stake amount, here is how it would be handled in the delegation logic
     stateful payable entrypoint stub_stake() = 
-        // if the staker is already a registered delegatee ( = he accepts delegated stake), add it to his stake in the delegation bookkeeping.
+        // calculate a theoretical new stake amount
+        let newStakedAmount = state.main_stakes_stub[Call.caller = 0] + Call.value
+        // check if the staker is already a registered delegatee ( = he accepts delegated stake), add it to his stake in the delegation bookkeeping.
         switch (is_delegatee(Call.caller))
             false => ()
             true => 
             // find the delegatee's stake in the bookkeeping by abusing the fact that he is in the list of delegators, too
-                let newStakedAmount = state.main_stakes_stub[Call.caller] + Call.value
                 update_delegatees_stake(newStakedAmount, Call.caller)
                 
         // and either way, update the staked amount in the main contract logic
-        put(state{main_stakes_stub[Call.caller] = Call.value})
+        put(state{main_stakes_stub[Call.caller] = newStakedAmount})
     
     
     //CRITICAL TODO: In case the staker reduced the amount, here is how it would handled with this delegation logic.
@@ -312,7 +312,9 @@ contract StakingPoC =
 
         // update amount in staking bookkeeping
         update_delegatees_stake(0, Call.caller)
-
+    
+    entrypoint stub_get_stake(staker: address) =
+        state.main_stakes_stub[staker]
 
     //
     stateful entrypoint stub_debug_set_epoch(epoch: int) =
@@ -324,6 +326,14 @@ contract StakingPoC =
 
     public entrypoint stub_debug_get_state() =
         state
+        
+
+        
+
+        
+
+        
+
         
 `
 
