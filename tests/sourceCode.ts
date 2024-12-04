@@ -6,6 +6,9 @@ include "List.aes"
 include "Option.aes"
 include "Frac.aes"
 
+contract interface HCElectionI =
+    entrypoint epoch : () => int
+
 contract interface RewardCallbackI =
   entrypoint reward_cb : (int, int, bool) => unit
 
@@ -14,6 +17,8 @@ contract interface StakingValidatorI =
   entrypoint stake : () => unit
   entrypoint get_available_balance : () => int
   entrypoint get_total_balance : () => int
+  entrypoint withdraw : (int) => unit
+  entrypoint adjust_stake : (int) => unit
 
 contract interface MainStakingI =
   entrypoint new_validator : (address, bool) => StakingValidatorI
@@ -22,16 +27,18 @@ contract interface MainStakingI =
 payable contract StakingPoC =
 
     record state = {
-        current_blockreward_stub : int, 
-        current_epoch_stub: int, 
+        current_epoch_stub: int, // debugging and testing, not used.
         delegated_stakes: list(delegated_stake), // 
         max_delegators: int,
-        main_stakes_stub: map(address, int), // staking balances from existing staking logic
         min_delegation_duration: int, // min amount of epochs somebody has to have delegated to be eligible for rewards
-        debug_last_withdrawn_amount: int,
+        debug_last_withdrawn_amount: int, // debugging and testing, not used.
         main_staking_ct : MainStakingI,
         staking_validator_ct: StakingValidatorI,
-        min_delegation_amount: int
+        min_delegation_amount: int,
+        total_queued_withdrawal_amount: int, // track how much value to hold back for requested withdrawals (from unstaking or rewards). not decided yet if needed, evaulating. currently set, but not read. evaluating with core.
+        queued_withdrawals: map(address, list(pending_withdrawal)),
+        max_withdrawal_queue_length : int,
+        hc_election_ct : HCElectionI
         }
 
     
@@ -42,23 +49,32 @@ payable contract StakingPoC =
         reward : int
         } 
 
-    stateful entrypoint init(validator: address, main_staking_ct : MainStakingI, min_delegation_amount: int, max_delegators: int) =
-    // call MainStaking to get a stakingValidator contract
+    record pending_withdrawal = {
+        amount: int,
+        from_epoch: int
+        }
+
+    stateful entrypoint init(validator: address, main_staking_ct : MainStakingI, hc_election_ct: HCElectionI, min_delegation_amount: int, max_delegators: int, min_delegation_duration: int, max_withdrawal_queue_length : int) =
+      // call MainStaking to get a stakingValidator contract
       let staking_validator_ct = main_staking_ct.new_validator(Contract.address, true)
       // register callback
       staking_validator_ct.register_reward_callback(Address.to_contract(Contract.address))
+      // as per request, we allow requiring to stake longer than necessary.
+      require(min_delegation_duration >= 5, "min_delegation_duration must be at least 5 epochs")
 
       { 
-        current_epoch_stub = 1, 
+        current_epoch_stub = 1, // debugging and testing, not used.
         delegated_stakes = [],
         max_delegators = max_delegators, // proposing 30 for the start?
-        current_blockreward_stub = 1 * (10 ^ 18), 
-        main_stakes_stub = {},
-        min_delegation_duration = 5,
-        debug_last_withdrawn_amount = 0,
+        min_delegation_duration = min_delegation_duration,
+        debug_last_withdrawn_amount = 0, // debugging and testing, not used.
         main_staking_ct = main_staking_ct,
         staking_validator_ct = staking_validator_ct,
-        min_delegation_amount = min_delegation_amount
+        min_delegation_amount = min_delegation_amount,
+        total_queued_withdrawal_amount = 0,
+        queued_withdrawals = {},
+        max_withdrawal_queue_length = max_withdrawal_queue_length,
+        hc_election_ct = hc_election_ct
        }
 
     
@@ -70,24 +86,25 @@ payable contract StakingPoC =
       let epoch = get_current_epoch() 
       let amount = Call.value
       let delegated_stakes = state.delegated_stakes
-      let new_delegated_stake = {delegator = Call.caller, stake_amount = Call.value, from_epoch = stub_debug_get_epoch(), reward = 0}
+      let new_delegated_stake = {delegator = Call.caller, stake_amount = Call.value, from_epoch = get_current_epoch(), reward = 0}
 
       put(state{ delegated_stakes = delegated_stakes ++ [new_delegated_stake] }) 
       state.staking_validator_ct.stake(value = Call.value)
 
 
-NEXT 
-    public stateful entrypoint withdraw_delegated_stakes(delegatee: address) =
+
+    public stateful entrypoint request_unstake_delegated_stakes(delegatee: address) =
+        // get my stakes
         let (my_delegated_stakes, others_delegated_stakes) = List.partition((delegation) => delegation.delegator == Call.caller, state.delegated_stakes)
 
-
+        // calculate their total reward
         let total_rewards = List.foldl((reward_acc, delegated_stake) =>  
             let updated_reward = reward_acc + delegated_stake.reward 
             updated_reward, 
             0, 
             my_delegated_stakes)
 
-
+        // calculate their total delegation amount
         let total_delegated = List.foldl((stake_acc, delegated_stake) =>  
             let updated_total_delegated_stake = stake_acc + delegated_stake.stake_amount 
             updated_total_delegated_stake, 
@@ -95,12 +112,15 @@ NEXT
             my_delegated_stakes)
 
         let total_payout = total_rewards + total_delegated 
-        // remove the delegated stakes
+
+        // remove these delegated stakes
         put(state{ delegated_stakes = others_delegated_stakes }) 
-        Chain.spend(Call.caller, total_payout)
+        
+        // request the amount or add it to the withdrawal queue 
+        withdraw_or_queue(Call.caller, total_payout)
 
     
-    public stateful entrypoint withdraw_rewards(delegatee: address) =
+    public stateful entrypoint request_withdraw_rewards() : string =
         let (my_delegated_stakes, others_delegated_stakes) = List.partition((delegation) => delegation.delegator == Call.caller, state.delegated_stakes) 
         require(!List.is_empty(my_delegated_stakes), "No delegated stakes found for this account.") 
 
@@ -121,30 +141,31 @@ NEXT
 
         put(state{delegated_stakes = others_delegated_stakes ++ updated_delegated_stakes}) 
         
+        // for testing
         put(state{debug_last_withdrawn_amount = total_rewards})
         require(total_rewards > 0, "No rewards available to withdraw yet")
-        Chain.spend(Call.caller, total_rewards) 
 
-    // Called by the stakingValidator contract when the validator this contract corresponds to gets his reward for the past epoch. 
-    // assigns every eligible delegator (if delegated long enough) a numerical reward.
+        withdraw_or_queue(Call.caller, total_rewards)
+        
+
+    /*  
+    * Called by the stakingValidator contract when the validator this contract corresponds to gets his reward for the past epoch. 
+    * assigns every eligible delegator (if delegated long enough) a numerical reward. 
+    */
     stateful payable entrypoint reward_cb(epoch: int, amount: int, restaked: bool) =
  
                     let all_delegations = state.delegated_stakes
 
                     let (all_eligible_delegators : list(delegated_stake), all_other_delegators) = List.partition((delegation) => 
-                    // reward if either staked for long enough, or in any case, if it's the block producer.
-                        (get_current_epoch() >= delegation.from_epoch + state.min_delegation_duration) || (delegation.delegator == Call.caller)
+                        (get_current_epoch() >= delegation.from_epoch + state.min_delegation_duration)
                             , all_delegations)
                     
-                    let total_eligible_stake : int = get_total_eligible_stake_amount_by_delegatee(Call.caller)
+                    // as base for calculation, include only thos who staked for long enough already.
+                    let total_eligible_stake = get_total_eligible_stake_amount()
 
                     let all_eligible_delegators_with_updated_rewards : list(delegated_stake) = List.map((delegator) => 
                         let percentage_of_total_stake = Frac.make_frac(delegator.stake_amount, total_eligible_stake) 
 
-                        // option 1: have a hardcoded block reward (for testing or however the staking contract implements things)    
-                        //let final_reward_frac = Frac.mul(percentage_of_total_stake, Frac.from_int(state.current_blockreward_stub))
-                        
-                        // option 2: take call.value as block reward
                         let final_reward_frac = Frac.mul(percentage_of_total_stake, Frac.from_int(amount))
 
                         let final_reward = Frac.floor(final_reward_frac)
@@ -160,24 +181,103 @@ NEXT
                     put(state{delegated_stakes = all_other_delegators ++ all_eligible_delegators_with_updated_rewards })
 
     
+    /* 
+    * called to withdraw all queued up withdrawals which represent funds that be unstaked by now in the MainStaking and be available as part of the available balance by now. 
+    */
+    stateful entrypoint withdraw() =
+    // 0 assert there are withdrawals
+        let all_withdrawals = state.queued_withdrawals[Call.caller = []]
+        require(List.length(all_withdrawals) > 0, "No queued withdrawals found for this user") // explicitly check, for UX/UI
+    
+        //1. get eligible withdrawals
+        let (all_eligible_withdrawals, other_withdrawals) = separate_eligible_withdrawals(Call.caller)
+        //2. calculate their amount
+        let total_withdrawal = List.foldl((acc, eligible_withdrawal) => acc + eligible_withdrawal.amount, 0, all_eligible_withdrawals)
+
+        //3. withdraw that amount from mainstaking
+        state.staking_validator_ct.withdraw(total_withdrawal)
+
+        //4. subtract it from the total locked amount
+        put(state{total_queued_withdrawal_amount @ tot = tot - total_withdrawal})
+
+        //5. put back only the non-eligible withdrawals into the user's state
+        put(state{queued_withdrawals[Call.caller] = other_withdrawals})
+
+        //6. transfer the amount to the user
+        Chain.spend(Call.caller, total_withdrawal)
+
+
   // ------------------------------------------------------------------------
-  // --   Getters
+  // --   Helpers
+  // ------------------------------------------------------------------------
+
+    /* 
+    * get withdrawals from user's queue which are (not) past their locking period - to be used in the UI also 
+    */
+    entrypoint separate_eligible_withdrawals(delegator: address) =
+        let all_withdrawals = state.queued_withdrawals[delegator = []]
+        let (all_eligible_withdrawals, other_withdrawals) = List.partition((queued_withdrawal) => 
+                        (get_current_epoch() >= queued_withdrawal.from_epoch)
+                            , all_withdrawals)
+        (all_eligible_withdrawals, other_withdrawals)
+
+    /* 
+     * Withdraw from MainStaking (through stakingValidator) if possible, 
+     * or trigger unlocking of funds in MainStaking (through stakingValidator) and put in withdrawal queue, so they can be later withdrawn. 
+     */
+    stateful function withdraw_or_queue(recipient: address, amount: int) =
+         // if there is enough available balance in the main staking, withdraw and transfer directly. 
+        if(state.staking_validator_ct.get_available_balance() >= amount)
+            state.staking_validator_ct.withdraw(amount)
+            //by here, the funds should be in this contract. pass them on.
+            Chain.spend(Call.caller, amount)
+            "SUCCESS" // helper for the frontend developer/tests. 
+        
+        // if there is not enough balance available: 
+        else
+        // 1.request unstake,
+            state.staking_validator_ct.adjust_stake(-amount)
+        // 2. process into withdrawal queue
+            queue_for_withdrawal(Call.caller, amount, calc_unlock_epoch())
+        // 3. and tell user to wait 5 epochs.
+            String.concat("WAIT TILL EPOCH ", Int.to_str(get_current_epoch() + state.min_delegation_duration)) // helper for the frontend developer/tests. 
+    
+    /* 
+    * Create a withdrawal in a list, which later can be processed, as soon as the corresponding value should be available in the main staking contract. 
+    */
+    stateful function queue_for_withdrawal(recipient: address, amount: int, epoch: int) =
+    // prevent queue from getting too long
+        require(List.length(state.queued_withdrawals[Call.caller = []]) =< state.max_withdrawal_queue_length, "Too many withdrawals in the queue for this account, withdraw eligible ones first.")
+    // add withdrawal to user's queue
+        let withdrawal : pending_withdrawal = {
+            amount = amount,
+            from_epoch = epoch
+          }
+
+        put(state{queued_withdrawals[recipient = []] @ existing = existing ++ [withdrawal]})
+
+        // increase the total locked withdrawal
+        put(state{total_queued_withdrawal_amount @ tot = tot + amount})
+
+    function calc_unlock_epoch() =
+        get_current_epoch() + 4
+  // ------------------------------------------------------------------------
+  // --   Getters 
   // ------------------------------------------------------------------------
 
     entrypoint get_current_epoch() =
-        state.current_epoch_stub
+        //state.current_epoch_stub
+        state.hc_election_ct.epoch()
 
-    // CRITICAL TODO: placeholder function that fetches the staking amount for a given delegatee (block producer)
     entrypoint get_available_balance() =
         state.staking_validator_ct.get_available_balance()
 
     entrypoint get_total_balance() =
         state.staking_validator_ct.get_total_balance()
 
-    
-    // get both delegators' stakes who are eligible for a reward already as well as the producer's/delegatee's stake, who is always eligible for a reward.
-    public entrypoint get_total_eligible_stake_amount_by_delegatee(delegatee: address) =
-        let (eligible, rest) = List.partition((delegation) => (get_current_epoch() >= delegation.from_epoch + state.min_delegation_duration) || delegation.delegator == Call.caller, state.delegated_stakes)
+    // get the total amount of delegated stake that has staked for at least X epochs already
+    public entrypoint get_total_eligible_stake_amount() =
+        let (eligible, rest) = List.partition((delegation) => (get_current_epoch() >= delegation.from_epoch + state.min_delegation_duration), state.delegated_stakes)
         
         List.foldl((stake_acc, delegated_stake) =>  
             let updated_total_eligible_stake = stake_acc + delegated_stake.stake_amount 
@@ -185,7 +285,7 @@ NEXT
             0, 
             eligible)
 
-    public entrypoint get_total_stake_amount_by_delegatee() =
+    public entrypoint get_total_stake_amount() =
         let all_delegations = state.delegated_stakes
         List.foldl((stake_acc, delegated_stake) =>  
             let updated_total_delegated_stake = stake_acc + delegated_stake.stake_amount 
@@ -196,64 +296,32 @@ NEXT
     public entrypoint get_minimum_stake_amount() : int =
         state.min_delegation_amount
 
-    
-  /*   public entrypoint get_all_delegations_by_delegatee(delegatee : address) : list(delegated_stake) =
-        require(is_delegatee(delegatee), "Tried fetching delegated stakes from a non-delegatee.")
-        Map.lookup_default(delegatee, state.delegated_stakes, []) */
 
-    
     public entrypoint get_all_delegations_by_delegator(delegator: address) =
         let all_delegations = state.delegated_stakes
         switch(all_delegations) 
             [] => []
             all => find_in_delegations_by_delegator(all, delegator) 
-      
-        //Map.to_list(state.my_delegatees[Call.caller = []])
 
     
     function find_in_delegations_by_delegator(delegations: list(delegated_stake), delegator: address) = 
         let found_delegations = List.filter((delegated) => delegated.delegator == delegator, delegations)
         found_delegations
 
-    // get your accumulated rewards 
     public entrypoint calculate_accumulated_rewards_per_delegator(delegator: address) =
         let found_delegations = get_all_delegations_by_delegator(delegator)
         List.foldl((acc, delegated_stake) => acc + delegated_stake.reward , 0 ,found_delegations)
 
 
-    // get all accumulated rewards per delegatee
-    public entrypoint calculate_accumulated_rewards() =
-
-        let (my_delegated_stakes, others) = List.partition((delegation) => delegation.delegator == Call.caller, state.delegated_stakes)
-        List.foldl((acc, delegated_stake) => acc + delegated_stake.stake_amount, 0, my_delegated_stakes)
-
-    
-    // TODO: Make internal function, calling stakingValidator !
-    stateful entrypoint stub_unstake() =
-        let stake = state.main_stakes_stub[Call.caller]
-        
-        // update amount in main staking balance
-        put(state{main_stakes_stub[Call.caller] = 0})
-
-        // update amount in staking bookkeeping
-        update_delegatees_stake(0)
-    
-    entrypoint get_total_balance() =
-        state.staking_validator_ct.get_total_balance()
-
-
   // ------------------------------------------------------------------------
-  // --   DEBUGGING - put into MainStakingStub Contract
+  // --   DEBUGGING - not used !
   // ------------------------------------------------------------------------
 
-    stateful entrypoint stub_debug_set_epoch(epoch: int) =
+    stateful entrypoint debug_set_epoch(epoch: int) =
         put(state{current_epoch_stub = epoch})
         state.current_epoch_stub
 
-    public entrypoint stub_debug_get_epoch() =
-        state.current_epoch_stub
-
-    public entrypoint stub_debug_get_state() =
+    public entrypoint debug_get_state() =
         state
 `
 
