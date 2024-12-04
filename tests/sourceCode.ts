@@ -1,8 +1,4 @@
-const sourceCode =`@compiler >= 6
-// CRITICAL TODO : make main staking contract use this accounting logic when crediting the rewards to the block producer - to prevent double dipping: getting the direct reward (without splits to delegatees and again through the delegation logic)
-// CRITICAL TODO : if a block producer changes his staked amount, this needs to be reflected in the bookkeeping of the delegated staking logic for the calculation of the delegators' rewards to work
-
-// TODO: Change list of delegatees to map of known delegatees for gas costs
+const sourceCode =`
 @compiler >= 6
 
 include "String.aes"
@@ -80,6 +76,7 @@ payable contract StakingPoC =
       state.staking_validator_ct.stake(value = Call.value)
 
 
+NEXT 
     public stateful entrypoint withdraw_delegated_stakes(delegatee: address) =
         let (my_delegated_stakes, others_delegated_stakes) = List.partition((delegation) => delegation.delegator == Call.caller, state.delegated_stakes)
 
@@ -148,7 +145,7 @@ payable contract StakingPoC =
                         //let final_reward_frac = Frac.mul(percentage_of_total_stake, Frac.from_int(state.current_blockreward_stub))
                         
                         // option 2: take call.value as block reward
-                        let final_reward_frac = Frac.mul(percentage_of_total_stake, Frac.from_int(Call.value))
+                        let final_reward_frac = Frac.mul(percentage_of_total_stake, Frac.from_int(amount))
 
                         let final_reward = Frac.floor(final_reward_frac)
                         
@@ -258,7 +255,6 @@ payable contract StakingPoC =
 
     public entrypoint stub_debug_get_state() =
         state
-        
 `
 
 export default sourceCode;
