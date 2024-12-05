@@ -6,9 +6,6 @@ include "List.aes"
 include "Option.aes"
 include "Frac.aes"
 
-contract interface HCElectionI =
-    entrypoint epoch : () => int
-
 contract interface RewardCallbackI =
   entrypoint reward_cb : (int, int, bool) => unit
 
@@ -19,6 +16,7 @@ contract interface StakingValidatorI =
   entrypoint get_total_balance : () => int
   entrypoint withdraw : (int) => unit
   entrypoint adjust_stake : (int) => unit
+  entrypoint get_current_epoch : () => int
 
 contract interface MainStakingI =
   entrypoint new_validator : (address, bool) => StakingValidatorI
@@ -37,8 +35,7 @@ payable contract StakingPoC =
         min_delegation_amount: int,
         total_queued_withdrawal_amount: int, // track how much value to hold back for requested withdrawals (from unstaking or rewards). not decided yet if needed, evaulating. currently set, but not read. evaluating with core.
         queued_withdrawals: map(address, list(pending_withdrawal)),
-        max_withdrawal_queue_length : int,
-        hc_election_ct : HCElectionI
+        max_withdrawal_queue_length : int
         }
 
     
@@ -54,7 +51,7 @@ payable contract StakingPoC =
         from_epoch: int
         }
 
-    stateful entrypoint init(validator: address, main_staking_ct : MainStakingI, hc_election_ct: HCElectionI, min_delegation_amount: int, max_delegators: int, min_delegation_duration: int, max_withdrawal_queue_length : int) =
+    stateful entrypoint init(validator: address, main_staking_ct : MainStakingI, min_delegation_amount: int, max_delegators: int, min_delegation_duration: int, max_withdrawal_queue_length : int) =
       // call MainStaking to get a stakingValidator contract
       let staking_validator_ct = main_staking_ct.new_validator(Contract.address, true)
       // register callback
@@ -73,8 +70,7 @@ payable contract StakingPoC =
         min_delegation_amount = min_delegation_amount,
         total_queued_withdrawal_amount = 0,
         queued_withdrawals = {},
-        max_withdrawal_queue_length = max_withdrawal_queue_length,
-        hc_election_ct = hc_election_ct
+        max_withdrawal_queue_length = max_withdrawal_queue_length
        }
 
     
@@ -267,7 +263,7 @@ payable contract StakingPoC =
 
     entrypoint get_current_epoch() =
         //state.current_epoch_stub
-        state.hc_election_ct.epoch()
+        state.staking_validator_ct.get_current_epoch()
 
     entrypoint get_available_balance() =
         state.staking_validator_ct.get_available_balance()
