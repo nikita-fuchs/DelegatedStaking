@@ -17,6 +17,7 @@ contract interface StakingValidatorI =
   entrypoint withdraw : (int) => unit
   entrypoint adjust_stake : (int) => unit
   entrypoint get_current_epoch : () => int
+  entrypoint get_validator_min_stake : () => int
 
 contract interface MainStakingI =
   entrypoint new_validator : (address, address, bool) => StakingValidatorI
@@ -56,8 +57,13 @@ payable contract StakingPoC =
       let staking_validator_ct = main_staking_ct.new_validator(Contract.address, validator, true)
       // register callback
       staking_validator_ct.register_reward_callback(Address.to_contract(Contract.address))
+      // get the validator_min_stake from MainStaking and... 
+      let defined_min_stake = staking_validator_ct.get_validator_min_stake()
+      //...check if the provided number suffices.
+      require(min_delegation_amount >= defined_min_stake, String.concat("The provided min_delegation_amount is lower than the required minimal_stake in this hyperchains setup, ", Int.to_str(defined_min_stake)))
       // as per request, we allow requiring to stake longer than necessary.
       require(min_delegation_duration >= 5, "min_delegation_duration must be at least 5 epochs")
+
 
       { 
         current_epoch_stub = 1, // debugging and testing, not used.
@@ -257,6 +263,7 @@ payable contract StakingPoC =
 
     function calc_unlock_epoch() =
         get_current_epoch() + 4
+
   // ------------------------------------------------------------------------
   // --   Getters 
   // ------------------------------------------------------------------------
