@@ -19,7 +19,7 @@ contract interface StakingValidatorI =
   entrypoint get_current_epoch : () => int
 
 contract interface MainStakingI =
-  entrypoint new_validator : (address, bool) => StakingValidatorI
+  entrypoint new_validator : (address, address, bool) => StakingValidatorI
 
 
 payable contract StakingPoC =
@@ -51,9 +51,9 @@ payable contract StakingPoC =
         from_epoch: int
         }
 
-    stateful entrypoint init(validator: address, main_staking_ct : MainStakingI, min_delegation_amount: int, max_delegators: int, min_delegation_duration: int, max_withdrawal_queue_length : int) =
+    stateful entrypoint init(validator : address, main_staking_ct : MainStakingI, min_delegation_amount: int, max_delegators: int, min_delegation_duration: int, max_withdrawal_queue_length : int) =
       // call MainStaking to get a stakingValidator contract
-      let staking_validator_ct = main_staking_ct.new_validator(Contract.address, true)
+      let staking_validator_ct = main_staking_ct.new_validator(Contract.address, validator, true)
       // register callback
       staking_validator_ct.register_reward_callback(Address.to_contract(Contract.address))
       // as per request, we allow requiring to stake longer than necessary.
