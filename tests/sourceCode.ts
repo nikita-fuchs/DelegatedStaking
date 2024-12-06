@@ -54,7 +54,7 @@ payable contract StakingPoC =
 
     stateful entrypoint init(validator : address, main_staking_ct : MainStakingI, min_delegation_amount: int, max_delegators: int, min_delegation_duration: int, max_withdrawal_queue_length : int) =
       // call MainStaking to get a stakingValidator contract
-      let staking_validator_ct = main_staking_ct.new_validator(Contract.address, validator, true)
+      let staking_validator_ct = main_staking_ct.new_validator(Contract.address, validator, true, value = Call.value)
       // register callback
       staking_validator_ct.register_reward_callback(Address.to_contract(Contract.address))
       // get the validator_min_stake from MainStaking and... 
