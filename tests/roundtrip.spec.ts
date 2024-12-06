@@ -4,8 +4,9 @@ import chaiAsPromised from 'chai-as-promised'
 chai.use(chaiAsPromised)
 
 
-import { AeSdk, MemoryAccount, Node, CompilerHttp, Contract, getBalance, AE_AMOUNT_FORMATS } from '@aeternity/aepp-sdk';
+import { AeSdk, MemoryAccount, Node, CompilerHttp, Contract, getBalance, AE_AMOUNT_FORMATS, decode, unpackTx } from '@aeternity/aepp-sdk';
 import sourceCode from './sourceCode.ts';
+import mainStakingSource from "./MainStakingAndStakingValidator.ts";
 import * as dotenv from 'dotenv';
 dotenv.config();
 
@@ -48,10 +49,23 @@ await aeSdk.spend(700, producer.address, {onAccount: fundSource, denomination: A
 await aeSdk.spend(350, delegator.address, {onAccount: fundSource, denomination: AE_AMOUNT_FORMATS.MILI_AE}); //0.35 AE
 
 var stakingContract
+var stakingContractAddress
+
+var min_delegation_amount
+var mainStakingContract
+var mainStakingContractAddress
+var stakingValidator
+
+let stopAfterTest = false;
 
 describe('Simple roundtrip:', function () {
 
   beforeEach(async function () {
+
+    if (stopAfterTest) {
+      this.skip(); // Skip remaining tests
+    }
+
     console.log('Waiting to prevent nonce issue...');
     // wait for 4 seconds
     await new Promise(resolve => setTimeout(resolve, 4000));
@@ -63,7 +77,53 @@ describe('Simple roundtrip:', function () {
     chai.expect(height).to.be.a('number');
   });
 
-  it('Should deploy the contract', async function () {
+
+  it('Should deploy the Main Staking Contract and read min_delegation_amount', async function () {
+
+    var args = [
+      100 //validator_min_stake, // 100 aettos
+    ]
+    // create a contract instance
+    mainStakingContract = await Contract.initialize({
+      ...aeSdk.getContext(),
+      sourceCode: mainStakingSource,
+    });
+
+    // Deploy the contract
+    let deployInfo;
+    try {
+      console.log('Deploying contract....');
+      console.log('Using account for deployment:', aeSdk.address);
+      deployInfo = await mainStakingContract.init(...args, {onAccount: fundSource});
+      mainStakingContractAddress = deployInfo.address;
+    } catch (error) {
+      console.log('Something went wrong, did you set up the SDK properly?');
+      console.log('Deployment failed:');
+      throw error;
+    }
+    console.log('Contract deployed successfully!');
+    console.log('Contract address:', mainStakingContract!.$options!.address);
+    //@ts-ignore
+    console.log('Transaction ID:', deployInfo.transaction);
+
+    let { decodedResult } = await mainStakingContract.get_validator_min_stake();
+    min_delegation_amount = decodedResult;
+
+    chai.expect(mainStakingContract!.$options!.address!.startsWith("ct_")).to.eql(true);
+  });
+
+  it('Should deploy the Delegated Staking Contract', async function () {
+
+    console.log("min_delegation_amount", min_delegation_amount);
+    var args = [
+      producer.address,           // producer / validator
+      mainStakingContractAddress, // mainStaking contract
+      min_delegation_amount,      // min_delegation_amount
+      2,                          // max_delegators
+      5,                          // min_delegation_duration 
+      3                           // max_withdrawal_queue_length : int) =
+    ]
+
 
     // create a contract instance
     stakingContract = await Contract.initialize({
@@ -76,12 +136,13 @@ describe('Simple roundtrip:', function () {
     try {
       console.log('Deploying contract....');
       console.log('Using account for deployment:', aeSdk.address);
-      deployInfo = await stakingContract.init({onAccount: fundSource});
+      deployInfo = await stakingContract.init(...args, {amount: 100, onAccount: fundSource});
+      //console.log('deployInfo:', deployInfo);
     } catch (error) {
-      console.log('Something went wrong, did you set up the SDK properly?');
-      console.log('Deployment failed:');
+      console.log('Deployment failed:', unpackTx(error.transaction));
       throw error;
     }
+
     console.log('Contract deployed successfully!');
     console.log('Contract address:', stakingContract!.$options!.address);
     //@ts-ignore
@@ -89,14 +150,16 @@ describe('Simple roundtrip:', function () {
 
 
     chai.expect(stakingContract!.$options!.address!.startsWith("ct_")).to.eql(true);
+
+
   });
 
-  it('should be able to stake', async function () {
-    console.log('Calling stub_stake');
+  it('should be able to (delegate) stake', async function () {
+    console.log('Calling delegate_stake');
 
     var callResult;
     try {
-      callResult = await stakingContract.stub_stake({amount: Math.pow(10, 17), onAccount: producer}); // 0,1 AE
+      callResult = await stakingContract.delegate_stake({amount: Math.pow(10, 2), onAccount: producer}); // 100 aettos
       console.log('Transaction ID:', callResult.hash);
       console.log('callResult.result.returnType:', callResult.result.returnType);
       console.log('Function call returned:', callResult.decodedResult);
@@ -106,45 +169,11 @@ describe('Simple roundtrip:', function () {
       throw error;
     }
     chai.expect(callResult.result.returnType).to.equal('ok');
+
+
+    stopAfterTest = true;
 });
 
-  it('should register Staker as delegatee', async function () {
-      console.log('Calling register_as_delegatee');
-
-      var callResult;
-      try {
-        callResult = await stakingContract.register_as_delegatee({onAccount: producer});
-        console.log('Transaction ID:', callResult.hash);
-        console.log('callResult.result.returnType:', callResult.result.returnType);
-        console.log('Function call returned:', callResult.decodedResult);
-        console.log('type:', typeof(callResult.decodedResult));
-      } catch (error) {
-        console.log('Calling register_as_delegatee errored:', error);
-        throw error;
-      }
-      chai.expect(callResult.result.returnType).to.equal('ok');
-  });
-
-  it('should delegate stake to delegatee', async function () {
-
-      const minStake = await stakingContract.get_minimum_stake_amount(producer.address);
-      console.log("minimum stake amount:", minStake.decodedResult);
-
-      // call function
-      console.log('Calling delegate_stake');
-      var callResult;
-      try {
-        callResult = await stakingContract.delegate_stake(producer.address, {amount: Math.pow(10, 17), onAccount: delegator}); //0.1 AE
-        console.log('Transaction ID:', callResult.hash);
-        console.log('Function call returned:', callResult.decodedResult);
-      } catch (error) {
-        console.log('Calling delegate_stake errored:', error);
-        throw error;
-      }
-
-      chai.expect(callResult!.result.returnType).to.equal('ok');
-    });
-    
     
 /*     it('should just get the state', async function () {
       let state = await stakingContract.stub_debug_get_state();  
@@ -289,14 +318,7 @@ it('staker should be able to increase his stake', async function () {
   chai.expect(newBalance - oldBalance).to.equal(BigInt(2 * Math.pow(10, 17))); // 0,2 AE
 }); 
 
-    /* 
-  
-  it('the increased stake amount is correctly noted in the delegation bookkeeping', function () {
-    chai.expect(false).to.be.a('boolean');
-  }); 
-
-  */
-    
+ 
   
   it('staker should be able to reduce his stake', async function () {
 
