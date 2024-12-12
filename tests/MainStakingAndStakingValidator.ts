@@ -1,5 +1,4 @@
 const mainStakingSource = `
-
 include "List.aes"
 include "Pair.aes"
 include "Option.aes"
@@ -74,12 +73,20 @@ payable contract StakingValidator =
     assert_owner_caller()
     put(state{reward_callback = Some(cb_ct)})
 
-  entrypoint rewards(epoch : int, amount : int, restaked : bool) =
+ /*  entrypoint rewards(epoch : int, amount : int, restaked : bool) =
     assert_main_staking_caller()
     switch(state.reward_callback)
       None => None
-      Some(cb_ct) => cb_ct.reward_cb(protected = true, gas = 20000, epoch, amount, restaked)
-    ()
+      Some(cb_ct) => 
+        cb_ct.reward_cb(protected = true, gas = 20000, epoch, amount, restaked)
+ */
+
+  entrypoint rewards(epoch : int, amount : int, restaked : bool) =
+    assert_main_staking_caller()
+    switch(state.reward_callback)
+      None => ()
+      Some(cb_ct) => cb_ct.reward_cb(epoch, amount, restaked)
+
 
   entrypoint has_reward_callback() =
     Option.is_some(state.reward_callback)
@@ -95,6 +102,10 @@ payable contract StakingValidator =
 
   entrypoint get_validator_min_stake() =
     state.main_staking_ct.get_validator_min_stake()
+
+  /// DEBUG:
+  entrypoint get_state() =
+    state
 
 main contract MainStaking =
   record validator =
@@ -191,7 +202,7 @@ main contract MainStaking =
   // -- Called from HCElection and/or consensus logic
   // ------------------------------------------------------------------------
   payable stateful entrypoint add_rewards(epoch : int, rewards : list(address * int)) =
-    assert_protocol_call()
+    //assert_protocol_call()
     let total_rewards = List.foldl((+), 0, List.map(Pair.snd, rewards))
     require(total_rewards == Call.value, "Incorrect total reward given")
     List.foreach(rewards, (r) => add_reward(epoch, r))
@@ -227,6 +238,19 @@ main contract MainStaking =
 
   entrypoint get_current_epoch() =
     state.current_epoch
+  // ------------------------------------------------------------------------
+  // --   Testing / Debugging
+  // ------------------------------------------------------------------------
+
+  stateful entrypoint debug_adjust_epoch_by(new_epoch : int) =
+    put(state{current_epoch = state.current_epoch + new_epoch})
+    state.current_epoch
+
+  stateful entrypoint debug_set_epoch_to(new_epoch : int) =
+    put(state{current_epoch = new_epoch})
+    state.current_epoch
+
+
 
   // ------------------------------------------------------------------------
   // --   Internal functions
@@ -305,7 +329,9 @@ main contract MainStaking =
   function assert_protocol_call() =
     require(Call.origin == Contract.creator, "Must be called by the protocol")
 
-    
+  entrypoint get_state() =
+    state
+
 `
 
 export default mainStakingSource

@@ -1,13 +1,18 @@
 import { describe } from "mocha";
 import * as chai from 'chai'    
+import { expect } from 'chai'    
 import chaiAsPromised from 'chai-as-promised'
+import { stakingValidatorContract } from "./stakingValidator.ts";
 chai.use(chaiAsPromised)
 
+import pkg from 'lodash';
+const { isEqual } = pkg;
 
 import { AeSdk, MemoryAccount, Node, CompilerHttp, Contract, getBalance, AE_AMOUNT_FORMATS, decode, unpackTx } from '@aeternity/aepp-sdk';
 import sourceCode from './sourceCode.ts';
 import mainStakingSource from "./MainStakingAndStakingValidator.ts";
 import * as dotenv from 'dotenv';
+import ContractWithMethods from "@aeternity/aepp-sdk/es/contract/Contract";
 dotenv.config();
 
 console.log('Funding generated accounts...')
@@ -45,16 +50,24 @@ const aeSdk = new AeSdk({
   onCompiler: new CompilerHttp('https://v8.compiler.aepps.com'),
 });
 
-await aeSdk.spend(700, producer.address, {onAccount: fundSource, denomination: AE_AMOUNT_FORMATS.MILI_AE});  //0.7 AE
+await aeSdk.spend(300, producer.address, {onAccount: fundSource, denomination: AE_AMOUNT_FORMATS.MILI_AE});  //0.3 AE
 await aeSdk.spend(350, delegator.address, {onAccount: fundSource, denomination: AE_AMOUNT_FORMATS.MILI_AE}); //0.35 AE
 
-var stakingContract
-var stakingContractAddress
+var delegationContract : ContractWithMethods<any>
+var stakingValidatorAddress;
 
 var min_delegation_amount
 var mainStakingContract
 var mainStakingContractAddress
-var stakingValidator
+var stakingValidator = await Contract.initialize({
+  ...aeSdk.getContext(),
+  sourceCode: stakingValidatorContract
+});
+
+const fistDelegationAmount = Math.pow(10, 2)
+const secondDelegationAmount = Math.pow(10, 2)
+const firstReward = Math.pow(10, 3) * 5 // 50000 aettos
+var currentEpoch // set by the helper functions, when calling set/adjust epoch
 
 let stopAfterTest = false;
 
@@ -101,7 +114,7 @@ describe('Simple roundtrip:', function () {
       console.log('Deployment failed:');
       throw error;
     }
-    console.log('Contract deployed successfully!');
+    console.log('Main staking contract deployed successfully!');
     console.log('Contract address:', mainStakingContract!.$options!.address);
     //@ts-ignore
     console.log('Transaction ID:', deployInfo.transaction);
@@ -112,9 +125,9 @@ describe('Simple roundtrip:', function () {
     chai.expect(mainStakingContract!.$options!.address!.startsWith("ct_")).to.eql(true);
   });
 
-  it('Should deploy the Delegated Staking Contract', async function () {
+  it('Should deploy the Delegated Staking Contract (and call MainStaking to create a stakingValidator)', async function () {
 
-    console.log("min_delegation_amount", min_delegation_amount);
+    console.log("min_delegation_amount:", min_delegation_amount);
     var args = [
       producer.address,           // producer / validator
       mainStakingContractAddress, // mainStaking contract
@@ -124,9 +137,9 @@ describe('Simple roundtrip:', function () {
       3                           // max_withdrawal_queue_length : int) =
     ]
 
-
+  
     // create a contract instance
-    stakingContract = await Contract.initialize({
+    delegationContract = await Contract.initialize({
       ...aeSdk.getContext(),
       sourceCode,
     });
@@ -136,30 +149,52 @@ describe('Simple roundtrip:', function () {
     try {
       console.log('Deploying contract....');
       console.log('Using account for deployment:', aeSdk.address);
-      deployInfo = await stakingContract.init(...args, {amount: 100, onAccount: fundSource});
+      deployInfo = await delegationContract.init(...args, {amount: min_delegation_amount, onAccount: fundSource});
       //console.log('deployInfo:', deployInfo);
     } catch (error) {
       console.log('Deployment failed:', unpackTx(error.transaction));
       throw error;
     }
 
-    console.log('Contract deployed successfully!');
-    console.log('Contract address:', stakingContract!.$options!.address);
+    console.log('Delegated staking contract deployed successfully!');
+    console.log('Contract address:', delegationContract!.$options!.address);
     //@ts-ignore
     console.log('Transaction ID:', deployInfo.transaction);
 
 
-    chai.expect(stakingContract!.$options!.address!.startsWith("ct_")).to.eql(true);
+
+
+      // find the address of the stakingValidator contract:
+
+      let state = await mainStakingContract.get_state();
+
+   //   console.log("state.decodedResult :", state.decodedResult);
+      let all = state.decodedResult.validators;
+ //     console.log("state.decodedResult.validators", state.decodedResult.validators);
+  
+      const first = Array.from(all)[0]
+      //console.log("first validator:", first);
+      //console.log("Contract address:", first[0]);
+      stakingValidatorAddress = 'ct_' + first[0].slice(3);
+      console.log("stakingValidatorAddress:", stakingValidatorAddress);
+
+
+    chai.expect(delegationContract!.$options!.address!.startsWith("ct_")).to.eql(true);
 
 
   });
 
   it('should be able to (delegate) stake', async function () {
+    await logStateOnContract(mainStakingContract);
     console.log('Calling delegate_stake');
+
+
+
+    
 
     var callResult;
     try {
-      callResult = await stakingContract.delegate_stake({amount: Math.pow(10, 2), onAccount: producer}); // 100 aettos
+      callResult = await delegationContract.delegate_stake({amount: fistDelegationAmount, onAccount: producer}); // 100 aettos
       console.log('Transaction ID:', callResult.hash);
       console.log('callResult.result.returnType:', callResult.result.returnType);
       console.log('Function call returned:', callResult.decodedResult);
@@ -170,43 +205,93 @@ describe('Simple roundtrip:', function () {
     }
     chai.expect(callResult.result.returnType).to.equal('ok');
 
-
-    stopAfterTest = true;
 });
+
+it('should be able to set an epoch (6)', async function () {
+  console.log('Calling debug_set_epoch_to');
+
+  let newEpoch = Number(await setEpochTo(6));
+  expect(newEpoch).to.equal(6);
+});
+
+  it('should be able to (delegate) stake a second time', async function () {
+    await logStateOnContract(mainStakingContract);
+    console.log('Calling delegate_stake');
+
+    var callResult;
+    try {
+      callResult = await delegationContract.delegate_stake({amount: secondDelegationAmount, onAccount: producer}); // 100 aettos
+      console.log('Transaction ID:', callResult.hash);
+      console.log('callResult.result.returnType:', callResult.result.returnType);
+      console.log('Function call returned:', callResult.decodedResult);
+      console.log('type:', typeof(callResult.decodedResult));
+    } catch (error) {
+      console.log('Calling register_as_delegatee errored:', error);
+      throw error;
+    }
+    chai.expect(callResult.result.returnType).to.equal('ok');
+
+});
+
+
+
+  it('should find both delegations in the list of all delegations', async function () {
+    console.log('Calling get_all_delegations');
+     
+    let {decodedResult} = await delegationContract.get_all_delegations(); 
+
+      console.log('Function call returned:', decodedResult);
+          
+      let expected =   [{
+        delegator: producer.address,
+        stake_amount: BigInt(fistDelegationAmount),
+        from_epoch: 1n,
+        reward: 0n
+      },
+      {
+        delegator: producer.address,
+        stake_amount: BigInt(secondDelegationAmount),
+        from_epoch: 6n,
+        reward: 0n
+                }];
+
+      let equal = isEqual(decodedResult, expected);
+      expect(equal).to.equal(true);
+
+});
+
+  it('should find both delegations and the initial minimum staking amount in the staking power of the MainStaking contract', async function () {
+    console.log("Checking state:");
+    await logStateOnContract(mainStakingContract);
+    
+    console.log('Calling staking_power');
+     
+    // the main contract is registering the contract address as an account address inside its owner stuff !
+    //let {decodedResult} = await delegationContract.staking_power(delegationContract.$options!.address); 
+    let {decodedResult} = await delegationContract.staking_power(); 
+
+      console.log('Function call returned:', decodedResult);
+      let sum = BigInt(fistDelegationAmount) + BigInt(secondDelegationAmount) + min_delegation_amount;
+      console.log('sum:', sum);
+      let expectedAmount = sum;
+      expect(decodedResult).to.equal(expectedAmount);
+
+});
+
+
+it('should NOT be able to call delegate_stake without value', async function () {
+  console.log('Calling delegate_stake');
+
+  await chai.expect(delegationContract.delegate_stake({onAccount: producer})).to.be.rejected
+  
+}); 
 
     
 /*     it('should just get the state', async function () {
       let state = await stakingContract.stub_debug_get_state();  
     }); 
  */
-  
-  it('Split rewards: should NOT split rewards to delegators who have not delegated for at least 5 epochs, but STILL reward delegatee(producer) even if he just staked', async function () {
 
-    // call function
-    console.log('Calling split_reward_to_delegators');
-
-    var callResult;
-    try {
-      callResult = await stakingContract.split_reward_to_delegators({amount: Math.pow(10, 17), onAccount: producer}); //0.1 AE
-      console.log('Transaction ID:', callResult.hash);
-      console.log('Function call returned:', callResult.decodedResult);
-    } catch (error) {
-      console.log('Calling split_reward_to_delegators errored:', error);
-      throw error;
-    }
-
-    let resDelegatee = await stakingContract.calculate_accumulated_rewards_per_delegatee_per_delegator(producer.address, producer.address);
-    let rewardsDelegatee = resDelegatee.decodedResult;
-    console.log("rewardsDelegatee:", rewardsDelegatee);
-
-    let resDelegator = await stakingContract.calculate_accumulated_rewards_per_delegatee_per_delegator(producer.address, delegator.address);
-    let rewardsDelegator = resDelegator.decodedResult;
-    console.log("rewardsDelegator:", rewardsDelegator);
-    
-  
-    chai.expect(rewardsDelegatee).to.equal(BigInt(Math.pow(10, 17))) && // 0,1 AE 
-    chai.expect(rewardsDelegator).to.equal(0n);
-  }); 
 
 
     /* // cheating: 
@@ -215,39 +300,45 @@ describe('Simple roundtrip:', function () {
     console.dir(state.decodedResult, { depth: null, colors: true });
  */
 
-    it('Split rewards: should split rewards to delegators who have delegated for at least 5 epochs as well as delegatee (producer)', async function () {
+    it('Split rewards: should split rewards to delegators who have delegated for at least 5 epochs', async function () {
+      // check the state of the stakingValidator:
+      console.log("check the state of the stakingValidator:");
 
-      let res = await stakingContract.stub_debug_get_epoch();
-      let currentEpoch = Number(res.decodedResult);
-      console.log("Current Epoch:", currentEpoch);
-      console.log('Increasing Epoch by 5...');
-      let res2 = await stakingContract.stub_debug_set_epoch(currentEpoch + 5);
-      let newEpoch = res2.decodedResult;
-      console.log("New Epoch:", newEpoch);
+      // await logStateOnContract(stakingValidator);
+    /*   let state = await stakingValidator.get_state({address: stakingValidatorAddress});
 
-      // call function
-      console.log('Calling split_reward_to_delegators');
-  
-      var callResult;
-      try {
-        callResult = await stakingContract.split_reward_to_delegators({amount: Math.pow(10, 17), onAccount: producer}); //0.1 AE
-        console.log('Transaction ID:', callResult.hash);
-        console.log('Function call returned:', callResult.decodedResult);
-      } catch (error) {
-        console.log('Calling split_reward_to_delegators errored:', error);
-        throw error;
-      }
-  
-      let resDelegatee = await stakingContract.calculate_accumulated_rewards_per_delegatee_per_delegator(producer.address, producer.address);
-      let rewardsDelegatee = resDelegatee.decodedResult;
-      console.log("rewardsDelegatee:", rewardsDelegatee);
-  
-      let resDelegator = await stakingContract.calculate_accumulated_rewards_per_delegatee_per_delegator(producer.address, delegator.address);
-      let rewardsDelegator = resDelegator.decodedResult;
-      console.log("rewardsDelegator:", rewardsDelegator);
- 
-      chai.expect(rewardsDelegatee).to.equal(BigInt(Math.pow(10, 17) / 2) + BigInt(Math.pow(10, 17))) && // 0,15 AE (previous rewards + 0,5 AE for 50% now) 
-      chai.expect(rewardsDelegator).to.equal(BigInt(Math.pow(10, 17) / 2)); // 0,05 AE (as ther delegator is eligible now)
+      console.log("stakingValidator state:");
+      console.dir(state.decodedResult, { depth: null, colors: true });
+       */
+      // call (modified) MainStaking:
+      let res = await mainStakingContract.add_rewards(6, [[producer.address, firstReward]], {amount: firstReward, onAccount: fundSource} );
+
+      // retrieve the last values passed to the delegation stake's callback function:
+      let lastValues = await delegationContract.debug_get_last_cb_values();
+      console.log('last values passed to callback function:', lastValues.decodedResult);
+
+      // expect that only one delegation got all the rewards, as it's the only one who has staked for long enough.
+      let expected =   [{
+        delegator: producer.address,
+        stake_amount: BigInt(fistDelegationAmount),
+        from_epoch: 1n,
+        reward: 50000n
+      },
+      {
+        delegator: producer.address,
+        stake_amount: BigInt(secondDelegationAmount),
+        from_epoch: 6n,
+        reward: 0n
+                }];
+
+
+      console.log('Calling get_all_delegations');
+      let {decodedResult} = await delegationContract.get_all_delegations(); 
+      console.log('Listing all delegations:', decodedResult);
+
+      let equal = isEqual(decodedResult, expected);
+      expect(equal).to.equal(true);
+      stopAfterTest = true;
     }); 
 
 
@@ -260,7 +351,7 @@ describe('Simple roundtrip:', function () {
     var callResult;
     
     try {
-        callResult = await stakingContract.withdraw_rewards(producer.address, {onAccount: delegator});
+        callResult = await delegationContract.withdraw_rewards(producer.address, {onAccount: delegator});
         console.log('Transaction ID:', callResult.hash);
         console.log('Function call returned:', callResult.decodedResult);
       } catch (error) {
@@ -268,7 +359,7 @@ describe('Simple roundtrip:', function () {
         throw error;
       }
 
-      let call = await stakingContract.stub_debug_get_state()
+      let call = await delegationContract.stub_debug_get_state()
       let state = call.decodedResult;
       var withdrawnReward = state.debug_last_withdrawn_amount
       console.log("withdrawnReward:", withdrawnReward);
@@ -278,7 +369,6 @@ describe('Simple roundtrip:', function () {
       chai.expect(callResult!.result.returnType).to.equal('ok') &&
       chai.expect(withdrawnReward).to.equal(BigInt(Math.pow(10, 17) / 2)); // 0,05 AE
 
-
   }); 
 
 
@@ -286,79 +376,13 @@ describe('Simple roundtrip:', function () {
   it('should not withdraw anything a second time / if you don`t have any rewards to withdraw', async function () {
         // call function
         console.log('Calling withdraw_rewards, again');
-        await chai.expect(stakingContract.withdraw_rewards(producer.address, {onAccount: delegator})).to.be.rejected
+        await chai.expect(delegationContract.withdraw_rewards(producer.address, {onAccount: delegator})).to.be.rejected
     
  }); 
 
 
  
-it('staker should be able to increase his stake', async function () {
-  console.log('Calling stub_stake');
 
-  let call = await stakingContract.stub_get_stake(producer.address);
-  let oldBalance = call.decodedResult;
-
-  var callResult;
-  try {
-    callResult = await stakingContract.stub_stake({amount: (2 * Math.pow(10, 17)), onAccount: producer}); // add 0,2 AE
-    console.log('Transaction ID:', callResult.hash);
-    console.log('callResult.result.returnType:', callResult.result.returnType);
-    console.log('Function call returned:', callResult.decodedResult);
-  } catch (error) {
-    console.log('Calling register_as_delegatee errored:', error);
-    throw error;
-  }
-
-  let call2 = await stakingContract.stub_get_stake(producer.address);
-  let newBalance = call2.decodedResult;
-
-  console.log("oldBalance:", oldBalance);
-  console.log("newBalance:", newBalance);
-
-  chai.expect(newBalance - oldBalance).to.equal(BigInt(2 * Math.pow(10, 17))); // 0,2 AE
-}); 
-
- 
-  
-  it('staker should be able to reduce his stake', async function () {
-
-      console.log('Calling stub_reduce_stake');
-
-  let call = await stakingContract.stub_get_stake(producer.address);
-  let oldBalance = call.decodedResult;
-
-  var callResult;
-  try {
-    callResult = await stakingContract.stub_reduce_stake(Math.pow(10, 17), {onAccount: producer}); // reduce by 0,1 AE
-    console.log('Transaction ID:', callResult.hash);
-    console.log('callResult.result.returnType:', callResult.result.returnType);
-    console.log('Function call returned:', callResult.decodedResult);
-  } catch (error) {
-    console.log('Calling register_as_delegatee errored:', error);
-    throw error;
-  }
-
-  let call2 = await stakingContract.stub_get_stake(producer.address);
-  let newBalance = call2.decodedResult;
-
-  //
-  //wait for 4 seconds to let the nodes sync
-  // await new Promise(resolve => setTimeout(resolve, 10000));
-
-  // get how much was transfered to the withdrawer
-  let call3 = await stakingContract.stub_debug_get_state()
-  let state = call3.decodedResult;
-  console.log(state);
-  var lastWithdraw = state.debug_last_withdrawn_amount
-  console.log("lastWithdraw:", lastWithdraw);
-
-
-  console.log("oldBalance:", oldBalance);
-  console.log("newBalance:", newBalance);
-  // chai.expect(lastWithdraw).to.equal(BigInt(Math.pow(10,17))) && // 0,1 AE
-  chai.expect(oldBalance - newBalance).to.equal(BigInt(Math.pow(10, 17))); // 0,1 AE
-  }); 
-  
    /* 
   
   it('the decreased stake amount is correctly noted in the delegation bookkeeping', function () {
@@ -374,9 +398,33 @@ it('staker should be able to increase his stake', async function () {
   }); 
   */
 
-function logState(){
+function adjustEpochBy(amount){
   return new Promise(async (resolve, reject) => {
-    let state = await stakingContract.stub_debug_get_state();
+    try {
+      let { decodedResult } = await mainStakingContract.debug_adjust_epoch_by(amount);
+      currentEpoch = Number(decodedResult);
+      resolve(decodedResult);
+    } catch(e) {
+      reject(e); 
+    }
+  });
+}
+
+function setEpochTo(amount){
+  return new Promise(async (resolve, reject) => {
+    try {
+      let { decodedResult } = await mainStakingContract.debug_set_epoch_to(amount);
+      currentEpoch = Number(decodedResult);
+      resolve(decodedResult);
+    } catch(e) {
+      reject(e); 
+    }
+  });
+}
+
+function logStateOnContract(contract : ContractWithMethods<any>){
+  return new Promise(async (resolve, reject) => {
+    let state = await contract.get_state();
     console.log("state:");
     console.dir(state.decodedResult, { depth: null, colors: true });
     resolve(true);

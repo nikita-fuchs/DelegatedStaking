@@ -18,10 +18,10 @@ contract interface StakingValidatorI =
   entrypoint adjust_stake : (int) => unit
   entrypoint get_current_epoch : () => int
   entrypoint get_validator_min_stake : () => int
-
+  
 contract interface MainStakingI =
   entrypoint new_validator : (address, address, bool) => StakingValidatorI
-
+  entrypoint staking_power : (address) => int
 
 payable contract StakingPoC =
 
@@ -36,7 +36,8 @@ payable contract StakingPoC =
         min_delegation_amount: int,
         total_queued_withdrawal_amount: int, // track how much value to hold back for requested withdrawals (from unstaking or rewards). not decided yet if needed, evaulating. currently set, but not read. evaluating with core.
         queued_withdrawals: map(address, list(pending_withdrawal)),
-        max_withdrawal_queue_length : int
+        max_withdrawal_queue_length : int,
+        debug_last_cb_values: (int * int * bool)
         }
 
     
@@ -76,7 +77,8 @@ payable contract StakingPoC =
         min_delegation_amount = min_delegation_amount,
         total_queued_withdrawal_amount = 0,
         queued_withdrawals = {},
-        max_withdrawal_queue_length = max_withdrawal_queue_length
+        max_withdrawal_queue_length = max_withdrawal_queue_length,
+        debug_last_cb_values = (0,0,false)
        }
 
     
@@ -155,7 +157,7 @@ payable contract StakingPoC =
     * assigns every eligible delegator (if delegated long enough) a numerical reward. 
     */
     stateful payable entrypoint reward_cb(epoch: int, amount: int, restaked: bool) =
- 
+                    put(state{debug_last_cb_values = (epoch, amount, restaked)})
                     let all_delegations = state.delegated_stakes
 
                     let (all_eligible_delegators : list(delegated_stake), all_other_delegators) = List.partition((delegation) => 
@@ -278,7 +280,7 @@ payable contract StakingPoC =
     entrypoint get_total_balance() =
         state.staking_validator_ct.get_total_balance()
 
-    // get the total amount of delegated stake that has staked for at least X epochs already
+    // get the total amount of delegated stake that has been staked for at least X epochs already
     public entrypoint get_total_eligible_stake_amount() =
         let (eligible, rest) = List.partition((delegation) => (get_current_epoch() >= delegation.from_epoch + state.min_delegation_duration), state.delegated_stakes)
         
@@ -288,7 +290,7 @@ payable contract StakingPoC =
             0, 
             eligible)
 
-    public entrypoint get_total_stake_amount() =
+    public entrypoint get_total_delegated_stake_amount() =
         let all_delegations = state.delegated_stakes
         List.foldl((stake_acc, delegated_stake) =>  
             let updated_total_delegated_stake = stake_acc + delegated_stake.stake_amount 
@@ -299,6 +301,8 @@ payable contract StakingPoC =
     public entrypoint get_minimum_stake_amount() : int =
         state.min_delegation_amount
 
+    public entrypoint get_all_delegations() =
+        state.delegated_stakes
 
     public entrypoint get_all_delegations_by_delegator(delegator: address) =
         let all_delegations = state.delegated_stakes
@@ -326,6 +330,13 @@ payable contract StakingPoC =
 
     public entrypoint debug_get_state() =
         state
+        
+    entrypoint staking_power() =
+        state.main_staking_ct.staking_power(Contract.address)
+
+    entrypoint debug_get_last_cb_values() =
+        state.debug_last_cb_values
+
 `
 
 export default sourceCode;

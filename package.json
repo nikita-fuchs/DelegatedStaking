@@ -11,8 +11,10 @@
   "license": "ISC",
   "dependencies": {
     "@aeternity/aepp-sdk": "^14.0.0",
+    "@types/lodash": "^4.17.13",
     "dotenv": "^16.4.5",
-    "esrun": "^3.2.26"
+    "esrun": "^3.2.26",
+    "lodash": "^4.17.21"
   },
   "devDependencies": {
     "@types/chai": "^5.0.1",
