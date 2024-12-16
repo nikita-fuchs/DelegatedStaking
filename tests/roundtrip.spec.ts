@@ -16,18 +16,19 @@ import ContractWithMethods from "@aeternity/aepp-sdk/es/contract/Contract";
 dotenv.config();
 
 console.log('Funding generated accounts...')
-const producerAcc = MemoryAccount.generate();
-console.log('producer address:', producerAcc.address);
-console.log('producer secret key:', producerAcc.secretKey);
+const aliceAcc = MemoryAccount.generate();
+console.log('alice address:', aliceAcc.address);
+console.log('alice secret key:', aliceAcc.secretKey);
 
-const delegatorAcc = MemoryAccount.generate();
-console.log('delegator address:', delegatorAcc.address);
-console.log('delegator secret key:', delegatorAcc.secretKey);
+const bobAcc = MemoryAccount.generate();
+console.log('bob address:', bobAcc.address);
+console.log('bob secret key:', bobAcc.secretKey);
+
 
 const fundSource = new MemoryAccount(`sk_${process.env.FUND_SOURCE_ACC_KEY}`);
 
-const producer = new MemoryAccount(producerAcc.secretKey);
-const delegator = new MemoryAccount(delegatorAcc.secretKey);
+const alice = new MemoryAccount(aliceAcc.secretKey);
+const bob = new MemoryAccount(bobAcc.secretKey);
 
 console.log('Blockproducer address:', fundSource.address);
 
@@ -46,12 +47,12 @@ console.log("Fund source balance:", await getBalance(fundSource.address, {onNode
 // create an SDK instance
 const aeSdk = new AeSdk({
   nodes: [{ name: 'network', instance: node }],
-  accounts: [fundSource, producer, delegator],
+  accounts: [fundSource, alice, bob],
   onCompiler: new CompilerHttp('https://v8.compiler.aepps.com'),
 });
 
-await aeSdk.spend(300, producer.address, {onAccount: fundSource, denomination: AE_AMOUNT_FORMATS.MILI_AE});  //0.3 AE
-await aeSdk.spend(350, delegator.address, {onAccount: fundSource, denomination: AE_AMOUNT_FORMATS.MILI_AE}); //0.35 AE
+await aeSdk.spend(300, alice.address, {onAccount: fundSource, denomination: AE_AMOUNT_FORMATS.MILI_AE});  //0.3 AE
+await aeSdk.spend(350, bob.address, {onAccount: fundSource, denomination: AE_AMOUNT_FORMATS.MILI_AE}); //0.35 AE
 
 var delegationContract : ContractWithMethods<any>
 var stakingValidatorAddress;
@@ -64,15 +65,16 @@ var stakingValidator = await Contract.initialize({
   sourceCode: stakingValidatorContract
 });
 
-const fistDelegationAmount = Math.pow(10, 2)
+const firstDelegationAmount = Math.pow(10, 2)
 const secondDelegationAmount = Math.pow(10, 2)
-const firstReward = Math.pow(10, 3) * 5 // 50000 aettos
+const thirdDelegationAmount = Math.pow(10, 2)
+const firstReward = Math.pow(10, 3) * 5 // 5000 aettos
 var currentEpoch // set by the helper functions, when calling set/adjust epoch
 
 let stopAfterTest = false;
 
 describe('Simple roundtrip:', function () {
-
+  this.timeout(80000);
   beforeEach(async function () {
 
     if (stopAfterTest) {
@@ -129,7 +131,7 @@ describe('Simple roundtrip:', function () {
 
     console.log("min_delegation_amount:", min_delegation_amount);
     var args = [
-      producer.address,           // producer / validator
+      alice.address,           // producer / validator
       mainStakingContractAddress, // mainStaking contract
       min_delegation_amount,      // min_delegation_amount
       2,                          // max_delegators
@@ -184,17 +186,106 @@ describe('Simple roundtrip:', function () {
 
   });
 
-  it('should be able to (delegate) stake', async function () {
-    await logStateOnContract(mainStakingContract);
-    console.log('Calling delegate_stake');
+  it('should register the fundSource as a producer, too, for the rewards of cycling epochs forward in time.', async function () {
 
-
-
-    
+    console.log('Calling new_validator');
 
     var callResult;
     try {
-      callResult = await delegationContract.delegate_stake({amount: fistDelegationAmount, onAccount: producer}); // 100 aettos
+      callResult = await mainStakingContract.new_validator(fundSource.address, fundSource.address, true, {amount: min_delegation_amount, onAccount: fundSource}); // 100 aettos
+      console.log('Transaction ID:', callResult.hash);
+      console.log('callResult.result.returnType:', callResult.result.returnType);
+      console.log('Function call returned:', callResult.decodedResult);
+      console.log('type:', typeof(callResult.decodedResult));
+    } catch (error) {
+      console.log('Calling new_validator errored:', error);
+      throw error;
+    }
+
+    chai.expect(callResult.result.returnType).to.equal('ok');
+
+});
+
+  it('Alice should be able to delegate stake', async function () {
+    await logStateOnContract(mainStakingContract);
+    console.log('Calling delegate_stake');
+
+    var callResult;
+    try {
+      callResult = await delegationContract.delegate_stake({amount: firstDelegationAmount, onAccount: alice}); // 100 aettos
+      console.log('Transaction ID:', callResult.hash);
+      console.log('callResult.result.returnType:', callResult.result.returnType);
+      console.log('Function call returned:', callResult.decodedResult);
+      console.log('type:', typeof(callResult.decodedResult));
+    } catch (error) {
+      console.log('Calling register_as_delegatee errored:', error);
+      throw error;
+    }
+
+    chai.expect(callResult.result.returnType).to.equal('ok');
+
+});
+
+
+
+it('Alice should NOT be able to withdraw the stake too early ', async function () {
+  console.log('Calling request_unstake_delegated_stakes');
+
+  await chai.expect(delegationContract.request_unstake_delegated_stakes({onAccount: alice})).to.be.rejected
+  
+}); 
+
+it('should be able to fast forward to epoch 2 ', async function () {
+  console.log('Calling forwardEpochsBy(1)');
+ 
+ 
+  let newEpoch = Number(await forwardEpochsBy(1));
+
+  console.log('Checking staked amount:', await getStakedAmount(2));
+  await logAwailableBalanceInMainStaking();
+
+  expect(newEpoch).to.equal(2);
+});
+
+
+it('Bob should be able to (delegate) stake again', async function () {
+  await logStateOnContract(mainStakingContract);
+  console.log('Calling delegate_stake');
+
+  var callResult;
+  try {
+    callResult = await delegationContract.delegate_stake({amount: secondDelegationAmount, onAccount: bob}); // 100 aettos
+    console.log('Transaction ID:', callResult.hash);
+    console.log('callResult.result.returnType:', callResult.result.returnType);
+    console.log('Function call returned:', callResult.decodedResult);
+    console.log('type:', typeof(callResult.decodedResult));
+  } catch (error) {
+    console.log('Calling register_as_delegatee errored:', error);
+    throw error;
+  }
+  chai.expect(callResult.result.returnType).to.equal('ok');
+
+});
+
+
+
+it('should be able to fast forward by 5 epochs to 7', async function () {
+  console.log('Calling debug_fast_forward_epochs');
+
+  let newEpoch = Number(await forwardEpochsBy(5));
+
+  expect(newEpoch).to.equal(7);
+});
+
+
+
+  it('Alice should be able to (delegate) stake a third time (not eligible for upcoming payouts)', async function () {
+    await logStateOnContract(mainStakingContract);
+    console.log('Calling delegate_stake');
+
+    var callResult;
+    try {
+      callResult = await delegationContract.delegate_stake({amount: thirdDelegationAmount, onAccount: alice}); // 100 aettos
       console.log('Transaction ID:', callResult.hash);
       console.log('callResult.result.returnType:', callResult.result.returnType);
       console.log('Function call returned:', callResult.decodedResult);
@@ -207,35 +298,9 @@ describe('Simple roundtrip:', function () {
 
 });
 
-it('should be able to set an epoch (6)', async function () {
-  console.log('Calling debug_set_epoch_to');
-
-  let newEpoch = Number(await setEpochTo(6));
-  expect(newEpoch).to.equal(6);
-});
-
-  it('should be able to (delegate) stake a second time', async function () {
-    await logStateOnContract(mainStakingContract);
-    console.log('Calling delegate_stake');
-
-    var callResult;
-    try {
-      callResult = await delegationContract.delegate_stake({amount: secondDelegationAmount, onAccount: producer}); // 100 aettos
-      console.log('Transaction ID:', callResult.hash);
-      console.log('callResult.result.returnType:', callResult.result.returnType);
-      console.log('Function call returned:', callResult.decodedResult);
-      console.log('type:', typeof(callResult.decodedResult));
-    } catch (error) {
-      console.log('Calling register_as_delegatee errored:', error);
-      throw error;
-    }
-    chai.expect(callResult.result.returnType).to.equal('ok');
-
-});
 
 
-
-  it('should find both delegations in the list of all delegations', async function () {
+  it('should find 3 delegations in the list of all delegations', async function () {
     console.log('Calling get_all_delegations');
      
     let {decodedResult} = await delegationContract.get_all_delegations(); 
@@ -243,15 +308,21 @@ it('should be able to set an epoch (6)', async function () {
       console.log('Function call returned:', decodedResult);
           
       let expected =   [{
-        delegator: producer.address,
-        stake_amount: BigInt(fistDelegationAmount),
+        delegator: alice.address,
+        stake_amount: BigInt(firstDelegationAmount),
         from_epoch: 1n,
         reward: 0n
       },
       {
-        delegator: producer.address,
+        delegator: bob.address,
         stake_amount: BigInt(secondDelegationAmount),
-        from_epoch: 6n,
+        from_epoch: 2n,
+        reward: 0n
+      },
+      {
+        delegator: alice.address,
+        stake_amount: BigInt(thirdDelegationAmount),
+        from_epoch: 7n,
         reward: 0n
                 }];
 
@@ -260,7 +331,7 @@ it('should be able to set an epoch (6)', async function () {
 
 });
 
-  it('should find both delegations and the initial minimum staking amount in the staking power of the MainStaking contract', async function () {
+  it('should find all three delegations and the initial minimum staking amount counted in the staking power of the MainStaking contract', async function () {
     console.log("Checking state:");
     await logStateOnContract(mainStakingContract);
     
@@ -271,7 +342,7 @@ it('should be able to set an epoch (6)', async function () {
     let {decodedResult} = await delegationContract.staking_power(); 
 
       console.log('Function call returned:', decodedResult);
-      let sum = BigInt(fistDelegationAmount) + BigInt(secondDelegationAmount) + min_delegation_amount;
+      let sum = BigInt(firstDelegationAmount) + BigInt(secondDelegationAmount) + BigInt(thirdDelegationAmount) + min_delegation_amount;
       console.log('sum:', sum);
       let expectedAmount = sum;
       expect(decodedResult).to.equal(expectedAmount);
@@ -282,36 +353,25 @@ it('should be able to set an epoch (6)', async function () {
 it('should NOT be able to call delegate_stake without value', async function () {
   console.log('Calling delegate_stake');
 
-  await chai.expect(delegationContract.delegate_stake({onAccount: producer})).to.be.rejected
+  await chai.expect(delegationContract.delegate_stake({onAccount: alice})).to.be.rejected
   
 }); 
 
-    
-/*     it('should just get the state', async function () {
-      let state = await stakingContract.stub_debug_get_state();  
-    }); 
- */
 
-
-
-    /* // cheating: 
-    console.log("state:");
-    let state = await stakingContract.stub_debug_get_state();
-    console.dir(state.decodedResult, { depth: null, colors: true });
- */
-
-    it('Split rewards: should split rewards to delegators who have delegated for at least 5 epochs', async function () {
+it('Split rewards: should split rewards to delegators who have delegated for at least 5 epochs', async function () {
       // check the state of the stakingValidator:
       console.log("check the state of the stakingValidator:");
 
       // await logStateOnContract(stakingValidator);
-    /*   let state = await stakingValidator.get_state({address: stakingValidatorAddress});
+      /* let state = await stakingValidator.get_state({address: stakingValidatorAddress});
 
       console.log("stakingValidator state:");
       console.dir(state.decodedResult, { depth: null, colors: true });
        */
+      
       // call (modified) MainStaking:
-      let res = await mainStakingContract.add_rewards(6, [[producer.address, firstReward]], {amount: firstReward, onAccount: fundSource} );
+      let res = await mainStakingContract.debug_end_epoch([[alice.address, firstReward]], {amount: firstReward, onAccount: fundSource} );
+      currentEpoch = Number(res.decodedResult); // don't forget: splitting rewards increases the epoch by 1!
 
       // retrieve the last values passed to the delegation stake's callback function:
       let lastValues = await delegationContract.debug_get_last_cb_values();
@@ -319,15 +379,21 @@ it('should NOT be able to call delegate_stake without value', async function () 
 
       // expect that only one delegation got all the rewards, as it's the only one who has staked for long enough.
       let expected =   [{
-        delegator: producer.address,
-        stake_amount: BigInt(fistDelegationAmount),
+        delegator: alice.address,
+        stake_amount: BigInt(firstDelegationAmount),
         from_epoch: 1n,
-        reward: 50000n
+        reward: 2500n
       },
       {
-        delegator: producer.address,
+        delegator: bob.address,
         stake_amount: BigInt(secondDelegationAmount),
-        from_epoch: 6n,
+        from_epoch: 2n,
+        reward: 2500n
+      },
+      {
+        delegator: alice.address,
+        stake_amount: BigInt(thirdDelegationAmount),
+        from_epoch: 7n,
         reward: 0n
                 }];
 
@@ -338,27 +404,114 @@ it('should NOT be able to call delegate_stake without value', async function () 
 
       let equal = isEqual(decodedResult, expected);
       expect(equal).to.equal(true);
-      stopAfterTest = true;
+      
     }); 
 
 
+it('should be able to fast forward an epoch by 5 to 13', async function () {
+      console.log('Calling forwardEpochsBy');
     
+      let newEpoch = Number(await forwardEpochsBy(5));
+      expect(newEpoch).to.equal(13);
+    });
   
-  it('delegator should be able to withdraw his reward', async function () {
+it('Split rewards again: should split rewards to delegators who have delegated for at least 5 epochs', async function () {
+      // check the state of the stakingValidator:
+      console.log("check the state of the stakingValidator:");
+
+      // await logStateOnContract(stakingValidator);
+      /* let state = await stakingValidator.get_state({address: stakingValidatorAddress});
+
+      console.log("stakingValidator state:");
+      console.dir(state.decodedResult, { depth: null, colors: true });
+       */
+      
+      // call (modified) MainStaking:
+      let res = await mainStakingContract.debug_end_epoch([[alice.address, firstReward]], {amount: firstReward, onAccount: fundSource} );
+      currentEpoch = Number(res.decodedResult); // don't forget: splitting rewards increases the epoch by 1!
+
+      // retrieve the last values passed to the delegation stake's callback function:
+      let lastValues = await delegationContract.debug_get_last_cb_values();
+      console.log('last values passed to callback function:', lastValues.decodedResult);
+
+      // expect that only one delegation got all the rewards, as it's the only one who has staked for long enough.
+      let expected =   [{
+        delegator: alice.address,
+        stake_amount: BigInt(firstDelegationAmount),
+        from_epoch: 1n,
+        reward: 4166n
+      },
+      {
+        delegator: bob.address,
+        stake_amount: BigInt(secondDelegationAmount),
+        from_epoch: 2n,
+        reward: 4166n
+      },
+      {
+        delegator: alice.address,
+        stake_amount: BigInt(thirdDelegationAmount),
+        from_epoch: 7n,
+        reward: 1666n
+                }];
+
+
+      console.log('Calling get_all_delegations');
+      let {decodedResult} = await delegationContract.get_all_delegations(); 
+      console.log('Listing all delegations:', decodedResult);
+
+      let equal = isEqual(decodedResult, expected);
+      expect(equal).to.equal(true);
+      
+    }); 
+
+
+
+it(' Delegation contract should have no balance available in main staking, because everything is restaked:', async function () {
+      // call function
+      console.log('Calling get_available_balance');
+  
+      var callResult;
+      
+      try {
+          callResult = await delegationContract.get_available_balance();
+          console.log('get_available_balance Function call returned:', callResult.decodedResult);
+        } catch (error) {
+          console.log('Calling get_available_balance errored:', error);
+          throw error;
+        }
+       
+  /* 
+        let call = await delegationContract.stub_debug_get_state()
+        let state = call.decodedResult;
+        var withdrawnReward = state.debug_last_withdrawn_amount
+        console.log("withdrawnReward:", withdrawnReward);
+  
+        console.dir(state.decodedResult, { depth: null, colors: true });
+  
+        chai.expect(callResult!.result.returnType).to.equal('ok') &&
+        chai.expect(withdrawnReward).to.equal(BigInt(Math.pow(10, 17) / 2)); // 0,05 AE
+        */
+        chai.expect(callResult.decodedResult).to.equal(0n);
+    }); 
+
+it('Bob should be able to initiate the withdrawal of his rewards', async function () {
+    console.log("currentEpoch:", await getCurrentEpoch());
     // call function
-    console.log('Calling withdraw_rewards');
+    console.log('Calling request_withdraw_rewards');
 
     var callResult;
     
     try {
-        callResult = await delegationContract.withdraw_rewards(producer.address, {onAccount: delegator});
-        console.log('Transaction ID:', callResult.hash);
-        console.log('Function call returned:', callResult.decodedResult);
+        callResult = await delegationContract.request_withdraw_rewards({onAccount: bob});
+        console.log('request_withdraw_rewards Transaction ID:', callResult.hash);
+        console.log('request_withdraw_rewards Function call returned:', callResult.decodedResult);
       } catch (error) {
-        console.log('Calling withdraw_rewards errored:', error);
+        console.log('Calling request_withdraw_rewards errored:', error);
         throw error;
       }
 
+      await logStateOnContract(delegationContract);
+/* 
       let call = await delegationContract.stub_debug_get_state()
       let state = call.decodedResult;
       var withdrawnReward = state.debug_last_withdrawn_amount
@@ -368,52 +521,182 @@ it('should NOT be able to call delegate_stake without value', async function () 
 
       chai.expect(callResult!.result.returnType).to.equal('ok') &&
       chai.expect(withdrawnReward).to.equal(BigInt(Math.pow(10, 17) / 2)); // 0,05 AE
+      */
+      chai.expect(callResult.decodedResult).to.equal(`WAIT TILL EPOCH ${currentEpoch + 6}`);
+  }); 
 
+  it('Alice should be able to initiate the withdrawal of her rewards', async function () {
+    console.log("currentEpoch:", await getCurrentEpoch());
+    // call function
+    console.log('Calling request_withdraw_rewards');
+
+    var callResult;
+    
+    try {
+        callResult = await delegationContract.request_withdraw_rewards({onAccount: alice});
+        console.log('request_withdraw_rewards Transaction ID:', callResult.hash);
+        console.log('request_withdraw_rewards Function call returned:', callResult.decodedResult);
+      } catch (error) {
+        console.log('Calling request_withdraw_rewards errored:', error);
+        throw error;
+      }
+
+      await logStateOnContract(delegationContract);
+/* 
+      let call = await delegationContract.stub_debug_get_state()
+      let state = call.decodedResult;
+      var withdrawnReward = state.debug_last_withdrawn_amount
+      console.log("withdrawnReward:", withdrawnReward);
+
+      console.dir(state.decodedResult, { depth: null, colors: true });
+
+      chai.expect(callResult!.result.returnType).to.equal('ok') &&
+      chai.expect(withdrawnReward).to.equal(BigInt(Math.pow(10, 17) / 2)); // 0,05 AE
+      */
+      chai.expect(callResult.decodedResult).to.equal(`WAIT TILL EPOCH ${currentEpoch + 6}`);
   }); 
 
 
- 
-  it('should not withdraw anything a second time / if you don`t have any rewards to withdraw', async function () {
+  it('Alice should be able to initiate the unstaking of her stake', async function () {
+    console.log("currentEpoch:", await getCurrentEpoch());
+    // call function
+    console.log('Calling request_withdraw_rewards');
+
+    var callResult;
+    
+    try {
+        callResult = await delegationContract.request_unstake_delegated_stakes({onAccount: alice});
+        console.log('request_withdraw_rewards Transaction ID:', callResult.hash);
+        console.log('request_withdraw_rewards Function call returned:', callResult.decodedResult);
+      } catch (error) {
+        console.log('Calling request_withdraw_rewards errored:', error);
+        throw error;
+      }
+
+      await logStateOnContract(delegationContract);
+
+      chai.expect(callResult.decodedResult).to.equal(`WAIT TILL EPOCH ${currentEpoch + 6}`);
+  }); 
+
+
+ it('Alice should NOT be able to initiate unstaking of any delegations or rewards anymore', async function () {
+  // call function
+  console.log('Calling request_withdraw_rewards');
+
+   await chai.expect(delegationContract.request_unstake_delegated_stakes({onAccount: alice})).to.be.rejected;
+}); 
+
+
+it('should be able to fast forward an epoch by 1 to 15', async function () {
+    console.log("currentEpoch:", await getCurrentEpoch());
+    console.log('Calling forwardEpochsBy');
+  
+    let newEpoch = Number(await forwardEpochsBy(1));
+    expect(newEpoch).to.equal(15);
+  });
+
+it(' Bob should NOT be able to request a second withdrawal, when he doesnt have any rewards to withdraw', async function () {
         // call function
-        console.log('Calling withdraw_rewards, again');
-        await chai.expect(delegationContract.withdraw_rewards(producer.address, {onAccount: delegator})).to.be.rejected
+        console.log('Calling request_withdraw_rewards, again');
+        await chai.expect(delegationContract.request_withdraw_rewards({onAccount: bob})).to.be.rejected
     
  }); 
 
+it('Bob should not be able to withdraw queued funds too early', async function () {
+  
+  // get current balance in queue:
+  console.log("currentEpoch:", await getCurrentEpoch());
 
+  chai.expect(delegationContract.withdraw({onAccount: bob})).to.be.rejected;
+}); 
+
+it('should be able to fast forward an epoch by 5 to 20', async function () {
+  console.log("currentEpoch:", await getCurrentEpoch());
+  console.log('Calling forwardEpochsBy');
+
+  let newEpoch = Number(await forwardEpochsBy(5));
+  expect(newEpoch).to.equal(20);
+});
+
+ it('Alice should be able to withdraw queued funds (stake and rewards)', async function () {
+  
+  // get all current balances in queue:
+
+  let state : any = await logStateOnContract(delegationContract);
+  let all = state.queued_withdrawals;   
+  const array = all.entries().next().value[1];
+  console.log("array:", array);
+
+  let firstValue = array[0];
+  console.log("firstValue:", firstValue);
+  let secondValue = array[1];
+  console.log("secondValue:", secondValue);
+
+  let finalSum = firstValue.amount + secondValue.amount;
+  console.log("finalSum:", finalSum);
+
+  await logAwailableBalanceInMainStaking();
+
+  await logStateOnContract(delegationContract);
+
+  var callResult;
+  
+  try {
+      callResult = await delegationContract.withdraw({onAccount: alice});
+      console.log('withdraw Transaction ID:', callResult.hash);
+      console.log('withdraw Function call returned:', callResult.decodedResult);
+    } catch (error) {
+      console.log('Calling withdraw errored:', error);
+      throw error;
+    }
+
+    await logStateOnContract(delegationContract);
+    
+
+    chai.expect(callResult.decodedResult).to.equal(finalSum);
+}); 
+
+ it('Bob should be able to withdraw queued funds (rewards)', async function () {
+  
+  // get current balance in queue:
+
+  let state : any = await logStateOnContract(delegationContract);
+  let all = state.queued_withdrawals as Map<any, any>;   
+  const value = all.get(bob.address)
+  console.log("array:", value);
+
+  let firstValue = all.get(bob.address)[0];
+  console.log("firstValue:", firstValue);
+
+  let finalSum = firstValue.amount
+  console.log("finalSum:", finalSum);
+
+  await logAwailableBalanceInMainStaking();
+
+  await logStateOnContract(delegationContract);
+
+  var callResult;
+  
+  try {
+      callResult = await delegationContract.withdraw({onAccount: bob});
+      console.log('withdraw Transaction ID:', callResult.hash);
+      console.log('withdraw Function call returned:', callResult.decodedResult);
+    } catch (error) {
+      console.log('Calling withdraw errored:', error);
+      throw error;
+    }
+
+    await logStateOnContract(delegationContract);
+    
+
+    chai.expect(callResult.decodedResult).to.equal(finalSum);
+}); 
  
 
-   /* 
-  
-  it('the decreased stake amount is correctly noted in the delegation bookkeeping', function () {
-    chai.expect(false).to.be.a('boolean');
-  }); 
-
-  */
-
-    /* 
-  
-  it('payouts should happen correctly after staker adjusts his stake', function () {
-    chai.expect(false).to.be.a('boolean');
-  }); 
-  */
-
-function adjustEpochBy(amount){
+function forwardEpochsBy(count){
   return new Promise(async (resolve, reject) => {
     try {
-      let { decodedResult } = await mainStakingContract.debug_adjust_epoch_by(amount);
-      currentEpoch = Number(decodedResult);
-      resolve(decodedResult);
-    } catch(e) {
-      reject(e); 
-    }
-  });
-}
-
-function setEpochTo(amount){
-  return new Promise(async (resolve, reject) => {
-    try {
-      let { decodedResult } = await mainStakingContract.debug_set_epoch_to(amount);
+      let { decodedResult } = await mainStakingContract.debug_fast_forward_epochs(count, fundSource.address, {onAccount: fundSource, amount: count});
       currentEpoch = Number(decodedResult);
       resolve(decodedResult);
     } catch(e) {
@@ -425,10 +708,46 @@ function setEpochTo(amount){
 function logStateOnContract(contract : ContractWithMethods<any>){
   return new Promise(async (resolve, reject) => {
     let state = await contract.get_state();
-    console.log("state:");
+    console.log(`State (${contract._name}):`);
     console.dir(state.decodedResult, { depth: null, colors: true });
-    resolve(true);
+    resolve(state.decodedResult);
   });
 }
+
+function logAwailableBalanceInMainStaking(){
+  return new Promise(async (resolve, reject) => {
+    console.log('checking available balance in main staking :');
+    var callResult = await delegationContract.get_available_balance();
+    console.log('get_available_balance Function call returned:', callResult.decodedResult);
+  
+    resolve(callResult.decodedResult);
+  });
+}
+
+
+function  getStakedAmount(epoch){
+  return new Promise(async (resolve, reject) => {
+    try{
+
+      var callResult = await delegationContract.get_total_staked_amount(epoch);
+      resolve(callResult.decodedResult);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function getCurrentEpoch(){
+  return new Promise(async (resolve, reject) => {
+    try {
+      let { decodedResult } = await mainStakingContract.get_current_epoch();
+      currentEpoch = Number(decodedResult);
+      resolve(currentEpoch);
+    } catch(e) {
+      reject(e); 
+    }
+  });
+}
+
 
 });

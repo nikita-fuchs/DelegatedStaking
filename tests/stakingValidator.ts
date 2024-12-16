@@ -1,4 +1,5 @@
-const sourceCode =`
+export const stakingValidatorContract = 
+`
 @compiler >= 6
 
 include "String.aes"
@@ -45,13 +46,13 @@ payable contract StakingPoC =
     record delegated_stake = {
         delegator: address,
         stake_amount: int,
-        from_epoch : int, // when delegated
+        from_epoch : int,
         reward : int
         } 
 
     record pending_withdrawal = {
         amount: int,
-        from_epoch: int // from when to withdraw
+        from_epoch: int
         }
 
     stateful entrypoint init(validator : address, main_staking_ct : MainStakingI, min_delegation_amount: int, max_delegators: int, min_delegation_duration: int, max_withdrawal_queue_length : int) =
@@ -98,31 +99,28 @@ payable contract StakingPoC =
 
 
 
-    public stateful entrypoint request_unstake_delegated_stakes() =
+    public stateful entrypoint request_unstake_delegated_stakes(delegatee: address) =
         // get my stakes
-        let (mine_long_enough, other_delegated_stakes) = List.partition((delegation) => delegation.delegator == Call.caller  && (state.staking_validator_ct.get_current_epoch() >= (delegation.from_epoch + state.min_delegation_duration)) , state.delegated_stakes)
-
-        // require there to be stakes
-        require(!List.is_empty(mine_long_enough), "No delegated stakes ready to be requested for withdrawal.") 
+        let (my_delegated_stakes, others_delegated_stakes) = List.partition((delegation) => delegation.delegator == Call.caller, state.delegated_stakes)
 
         // calculate their total reward
         let total_rewards = List.foldl((reward_acc, delegated_stake) =>  
             let updated_reward = reward_acc + delegated_stake.reward 
             updated_reward, 
             0, 
-            mine_long_enough)
+            my_delegated_stakes)
 
         // calculate their total delegation amount
         let total_delegated = List.foldl((stake_acc, delegated_stake) =>  
             let updated_total_delegated_stake = stake_acc + delegated_stake.stake_amount 
             updated_total_delegated_stake, 
             0, 
-            mine_long_enough)
+            my_delegated_stakes)
 
         let total_payout = total_rewards + total_delegated 
 
         // remove these delegated stakes
-        put(state{ delegated_stakes = other_delegated_stakes }) 
+        put(state{ delegated_stakes = others_delegated_stakes }) 
         
         // request the amount or add it to the withdrawal queue 
         withdraw_or_queue(Call.caller, total_payout)
@@ -362,6 +360,6 @@ payable contract StakingPoC =
     entrypoint debug_get_last_cb_values() =
         state.debug_last_cb_values
 
-`
 
-export default sourceCode;
+
+`

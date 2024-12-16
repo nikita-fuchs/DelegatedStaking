@@ -205,6 +205,7 @@ main contract MainStaking =
     //assert_protocol_call()
     let total_rewards = List.foldl((+), 0, List.map(Pair.snd, rewards))
     require(total_rewards == Call.value, "Incorrect total reward given")
+
     List.foreach(rewards, (r) => add_reward(epoch, r))
     [ unlock_stake_(v_addr, validator, epoch) | (v_addr, validator) <- Map.to_list(state.validators) ]
     // At the end of epoch X we distribute rewards for X - 1; thus current_epoch
@@ -221,6 +222,18 @@ main contract MainStaking =
                          if(s >= state.validator_min_stake) ]
 
     List.sort(cmp_validator, vs)
+
+  payable stateful entrypoint debug_add_rewards(epoch : int, rewards : list(address * int)) =
+    //assert_protocol_call()
+    let total_rewards = List.foldl((+), 0, List.map(Pair.snd, rewards))
+
+    // for testing, we check the correct amount of passed AE in the debug_fast_forward_epochs function
+    require(total_rewards =< Call.value, "Incorrect total reward given")
+    List.foreach(rewards, (r) => add_reward(epoch, r))
+    [ unlock_stake_(v_addr, validator, epoch) | (v_addr, validator) <- Map.to_list(state.validators) ]
+    // At the end of epoch X we distribute rewards for X - 1; thus current_epoch
+    // is (soon) X + 1. I.e. X - 1 + 2.
+    put(state{current_epoch = epoch + 2})
 
   // ------------------------------------------------------------------------
   // -- Lookup API
@@ -242,15 +255,20 @@ main contract MainStaking =
   // --   Testing / Debugging
   // ------------------------------------------------------------------------
 
-  stateful entrypoint debug_adjust_epoch_by(new_epoch : int) =
-    put(state{current_epoch = state.current_epoch + new_epoch})
+  payable stateful entrypoint debug_fast_forward_epochs(n : int, beneficiary: address) =
+       require(Call.value >= n * 1, "Call.value must be at least 1 * the amount of the forwarded epochs")
+       [debug_end_epoch([(beneficiary, 1)]) | x <- [1..n]]
+       state.current_epoch
+
+  //payable stateful function end_epoch(e : int) =
+   // lock_stake(e + 4)
+   // add_rewards()
+
+  payable stateful entrypoint debug_end_epoch(rewards : list(address * int)) =
+    require(Call.value >= 1, "Call.value must be at least 1")
+    debug_add_rewards(state.current_epoch - 1, rewards)
+    lock_stake(state.current_epoch + 4)
     state.current_epoch
-
-  stateful entrypoint debug_set_epoch_to(new_epoch : int) =
-    put(state{current_epoch = new_epoch})
-    state.current_epoch
-
-
 
   // ------------------------------------------------------------------------
   // --   Internal functions
@@ -331,6 +349,8 @@ main contract MainStaking =
 
   entrypoint get_state() =
     state
+    
+    
 
 `
 
