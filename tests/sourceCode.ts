@@ -27,7 +27,7 @@ contract interface MainStakingI =
 payable contract StakingPoC =
 
     record state = {
-        delegated_stakes: list(delegated_stake), // 
+        delegated_stakes: list(delegated_stake), 
         max_delegators: int,
         min_delegation_duration: int, // min amount of epochs somebody has to have delegated to be eligible for rewards
         main_staking_ct : MainStakingI,
@@ -36,8 +36,8 @@ payable contract StakingPoC =
         total_queued_withdrawal_amount: int, // track how much value to hold back for requested withdrawals (from unstaking or rewards). not decided yet if needed, evaulating. currently set, but not read. evaluating with core.
         queued_withdrawals: map(address, list(pending_withdrawal)),
         max_withdrawal_queue_length : int,
-        debug_last_cb_values: (int * int * bool),
-        debug_mainstaking_available_balance : int,
+        debug_last_cb_values: (int * int * bool), // debugging and testing, not used.
+        debug_mainstaking_available_balance : int, // debugging and testing, not used.
         debug_last_withdrawn_amount: int // debugging and testing, not used.
         }
 
@@ -79,7 +79,7 @@ payable contract StakingPoC =
         max_withdrawal_queue_length = max_withdrawal_queue_length,
         debug_last_cb_values = (0,0,false),
         debug_mainstaking_available_balance = 0,
-        debug_last_withdrawn_amount = 0 // debugging and testing, not used.
+        debug_last_withdrawn_amount = 0 
        }
 
     
@@ -349,15 +349,16 @@ payable contract StakingPoC =
 
     entrypoint get_all_queued_withdrawals_by_owner(owner : address) =
         state.queued_withdrawals[owner = []]
+
+    entrypoint staking_power() =
+        state.main_staking_ct.staking_power(Contract.address)
+
   // ------------------------------------------------------------------------
-  // --   DEBUGGING - not used !
+  // --   DEBUGGING
   // ------------------------------------------------------------------------
 
     public entrypoint get_state() =
         state
-        
-    entrypoint staking_power() =
-        state.main_staking_ct.staking_power(Contract.address)
 
     entrypoint debug_get_last_cb_values() =
         state.debug_last_cb_values
