@@ -55,6 +55,7 @@ payable contract StakingPoC =
         }
 
     stateful entrypoint init(validator : address, main_staking_ct : MainStakingI, min_delegation_amount: int, max_delegators: int, min_delegation_duration: int, max_withdrawal_queue_length : int) =
+      require(Contract.balance >= min_delegation_amount, "Must provide min_delegation_amount as value to contract initialisation" )
       // call MainStaking to get a stakingValidator contract
       let staking_validator_ct = main_staking_ct.new_validator(Contract.address, validator, true, value = Contract.balance)
       // register callback
@@ -99,8 +100,10 @@ payable contract StakingPoC =
 
 
     public stateful entrypoint request_unstake_delegated_stakes() =
+        
+        let current_epoch = state.staking_validator_ct.get_current_epoch()
         // get my stakes
-        let (mine_long_enough, other_delegated_stakes) = List.partition((delegation) => delegation.delegator == Call.caller  && (state.staking_validator_ct.get_current_epoch() >= (delegation.from_epoch + state.min_delegation_duration)) , state.delegated_stakes)
+        let (mine_long_enough, other_delegated_stakes) = List.partition((delegation) => delegation.delegator == Call.caller  && (current_epoch >= (delegation.from_epoch + state.min_delegation_duration)) , state.delegated_stakes)
 
         // require there to be stakes
         require(!List.is_empty(mine_long_enough), "No delegated stakes ready to be requested for withdrawal.") 
@@ -226,9 +229,10 @@ payable contract StakingPoC =
     * get withdrawals from user's queue which are (not) past their locking period - to be used in the UI also 
     */
     entrypoint separate_eligible_withdrawals(delegator: address) =
+        let current_epoch = get_current_epoch()
         let all_withdrawals = state.queued_withdrawals[delegator = []]
         let (all_eligible_withdrawals, other_withdrawals) = List.partition((queued_withdrawal) => 
-                        (get_current_epoch() >= queued_withdrawal.from_epoch)
+                        (current_epoch >= queued_withdrawal.from_epoch)
                             , all_withdrawals)
         (all_eligible_withdrawals, other_withdrawals)
 
@@ -349,6 +353,7 @@ payable contract StakingPoC =
 
     entrypoint get_all_queued_withdrawals_by_owner(owner : address) =
         state.queued_withdrawals[owner = []]
+
 
     entrypoint staking_power() =
         state.main_staking_ct.staking_power(Contract.address)
