@@ -68,7 +68,8 @@ var stakingValidator = await Contract.initialize({
 const firstDelegationAmount = Math.pow(10, 2)
 const secondDelegationAmount = Math.pow(10, 2)
 const thirdDelegationAmount = Math.pow(10, 2)
-const firstReward = Math.pow(10, 3) * 5 // 5000 aettos
+const firstReward = Math.pow(10, 3) * 7 + 500 // 7500 aettos
+const secondReward = Math.pow(10, 4) // 10000 aettos
 var currentEpoch // set by the helper functions, when calling set/adjust epoch
 
 let stopAfterTest = false;
@@ -134,7 +135,7 @@ describe('Simple roundtrip:', function () {
       alice.address,           // producer / validator
       mainStakingContractAddress, // mainStaking contract
       min_delegation_amount,      // min_delegation_amount
-      2,                          // max_delegators
+      3,                          // max_delegators
       5,                          // min_delegation_duration 
       3                           // max_withdrawal_queue_length : int) =
     ]
@@ -300,14 +301,21 @@ it('should be able to fast forward by 5 epochs to 7', async function () {
 
 
 
-  it('should find 3 delegations in the list of all delegations', async function () {
+  it('should find 4 delegations in the list of all delegations', async function () {
     console.log('Calling get_all_delegations');
      
     let {decodedResult} = await delegationContract.get_all_delegations(); 
 
       console.log('Function call returned:', decodedResult);
           
-      let expected =   [{
+      let expected =   [
+        {
+          delegator: fundSource.address,
+          stake_amount: BigInt(min_delegation_amount),
+          from_epoch: 1n,
+          reward: 0n
+        },
+        {
         delegator: alice.address,
         stake_amount: BigInt(firstDelegationAmount),
         from_epoch: 1n,
@@ -331,7 +339,7 @@ it('should be able to fast forward by 5 epochs to 7', async function () {
 
 });
 
-  it('should find all three delegations and the initial minimum staking amount counted in the staking power of the MainStaking contract', async function () {
+  it('should find all four delegations and the initial minimum staking amount counted in the staking power of the MainStaking contract', async function () {
     console.log("Checking state:");
     await logStateOnContract(mainStakingContract);
     
@@ -378,7 +386,14 @@ it('Split rewards: should split rewards to delegators who have delegated for at 
       console.log('last values passed to callback function:', lastValues.decodedResult);
 
       // expect that only one delegation got all the rewards, as it's the only one who has staked for long enough.
-      let expected =   [{
+      let expected =   [
+        {
+          delegator: fundSource.address,
+          stake_amount: BigInt(min_delegation_amount),
+          from_epoch: 1n,
+          reward: 2500n
+        },
+        {
         delegator: alice.address,
         stake_amount: BigInt(firstDelegationAmount),
         from_epoch: 1n,
@@ -427,7 +442,7 @@ it('Split rewards again: should split rewards to delegators who have delegated f
        */
       
       // call (modified) MainStaking:
-      let res = await mainStakingContract.debug_end_epoch([[alice.address, firstReward]], {amount: firstReward, onAccount: fundSource} );
+      let res = await mainStakingContract.debug_end_epoch([[alice.address, secondReward]], {amount: secondReward, onAccount: fundSource} );
       currentEpoch = Number(res.decodedResult); // don't forget: splitting rewards increases the epoch by 1!
 
       // retrieve the last values passed to the delegation stake's callback function:
@@ -435,23 +450,30 @@ it('Split rewards again: should split rewards to delegators who have delegated f
       console.log('last values passed to callback function:', lastValues.decodedResult);
 
       // expect that only one delegation got all the rewards, as it's the only one who has staked for long enough.
-      let expected =   [{
+      let expected =   [
+        {
+          delegator: fundSource.address,
+          stake_amount: BigInt(min_delegation_amount),
+          from_epoch: 1n,
+          reward: 5000n
+        },
+        {
         delegator: alice.address,
         stake_amount: BigInt(firstDelegationAmount),
         from_epoch: 1n,
-        reward: 4166n
+        reward: 5000n
       },
       {
         delegator: bob.address,
         stake_amount: BigInt(secondDelegationAmount),
         from_epoch: 2n,
-        reward: 4166n
+        reward: 5000n
       },
       {
         delegator: alice.address,
         stake_amount: BigInt(thirdDelegationAmount),
         from_epoch: 7n,
-        reward: 1666n
+        reward: 2500n
                 }];
 
 
@@ -623,8 +645,9 @@ it('should be able to fast forward an epoch by 5 to 20', async function () {
   // get all current balances in queue:
 
   let state : any = await logStateOnContract(delegationContract);
-  let all = state.queued_withdrawals;   
-  const array = all.entries().next().value[1];
+  let all : Map<any, any> = state.queued_withdrawals;   
+  const array = all.get(alice.address)
+
   console.log("array:", array);
 
   let firstValue = array[0];
