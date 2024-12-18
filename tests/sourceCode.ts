@@ -56,6 +56,14 @@ payable contract StakingPoC =
 
     stateful entrypoint init(validator : address, main_staking_ct : MainStakingI, min_delegation_amount: int, max_delegators: int, min_delegation_duration: int, max_withdrawal_queue_length : int) =
       require(Contract.balance >= min_delegation_amount, "Must provide min_delegation_amount as value to contract initialisation" )
+      
+      // record the initial delegation among stakes:
+      // same logic as delegate_stake(), only replaces Call.value by Contract.balance, in order to record the initial stake among the delegations.      
+      
+      let amount = Contract.balance
+      
+
+
       // call MainStaking to get a stakingValidator contract
       let staking_validator_ct = main_staking_ct.new_validator(Contract.address, validator, true, value = Contract.balance)
       // register callback
@@ -67,9 +75,12 @@ payable contract StakingPoC =
       // as per request, we allow requiring to stake longer than necessary.
       require(min_delegation_duration >= 5, "min_delegation_duration must be at least 5 epochs")
 
+      
+      let epoch = staking_validator_ct.get_current_epoch() 
+      let initial_stake = {delegator = Call.caller, stake_amount = amount, from_epoch = epoch, reward = 0}
 
       { 
-        delegated_stakes = [],
+        delegated_stakes = [initial_stake],
         max_delegators = max_delegators, // proposing 30 for the start?
         min_delegation_duration = min_delegation_duration,
         main_staking_ct = main_staking_ct,
