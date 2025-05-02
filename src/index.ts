@@ -1,13 +1,13 @@
 // APIS: Everything from https://developer.viva.com/apis-for-payments/payment-api/#tag/Marketplace-Sellers
 // and authentication
 
-const axios = require('axios');
-const qs = require('qs');
+import axios from 'axios';
+import qs from 'qs';
 import * as dotenv from 'dotenv';
-import { getVivaDemoConfig, vivaSetupConfig } from '../config/demo';
-import { getVivaProductionConfig } from '../config/prod';
+import { getVivaDemoConfig, vivaSetupConfig } from '../config/demo.js';
+import { getVivaProductionConfig } from '../config/prod.js';
 import { AxiosError, AxiosResponse } from 'axios';
-import { getOAuthTokenResponse } from './types';
+import { getOAuthTokenResponse } from './types.js';
 dotenv.config();
 
 
