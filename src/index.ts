@@ -24,7 +24,7 @@ export class Viva {
 *
 * If you don't include them when making an API request, or use incorrect credentials, you will get an error. 
 */
-public getOAuthToken = async (environment: 'sandbox' | 'production') : Promise<AxiosResponse<getOAuthTokenResponse> | AxiosError<unknown>> => {
+public getOAuthToken = async () : Promise<AxiosResponse<getOAuthTokenResponse> | AxiosError<unknown>> => {
     // Your credentials
     const username = this.config.VIVA_SMART_CHECKOUT_ID;
     const password = this.config.VIVA_SMART_CHECKOUT_PW;

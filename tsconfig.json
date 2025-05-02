@@ -1,9 +1,16 @@
 {
-    "compilerOptions": {
-      "allowSyntheticDefaultImports": true,
-      "allowImportingTsExtensions": true,
-      "target": "ES2022",
-      "module": "ESNext", // Required for this setting
-      "moduleResolution": "Node" // Common setting for proper resolution
-    }
+  "compilerOptions": {
+    "allowSyntheticDefaultImports": true,
+    "allowImportingTsExtensions": true,
+    "target": "ES2022",
+    "module": "ESNext", // Required for this setting
+    "moduleResolution": "Node", // Common setting for proper resolution
+    "plugins": [
+      {
+        "transform": "typia/lib/transform"
+      }
+    ],
+    "strictNullChecks": true,
+    "strict": true
   }
+}
