@@ -31,11 +31,13 @@ describe('Simple roundtrip:', function () {
   it('should log in to Viva and get an OAuth token', async function () {
     console.log('Logging into viva..');
     let response = await viva.getOAuthToken();
+    //@ts-ignore
     if ('data' in response) {
+      //console.log('Response:', response.data);
       try {
-        typia.assert<getOAuthTokenResponse>(response.data);
+        let check = typia.is<getOAuthTokenResponse>(response.data);
         // If we get here, the validation passed
-        expect(true).to.be.true;
+        expect(check).to.be.true;
       } catch (error) {
         console.error("Validation error:", error);
         expect.fail("Response data did not match expected type");
